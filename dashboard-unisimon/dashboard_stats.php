@@ -1,10 +1,10 @@
 <?php
-include 'db.php';
+include './db.php';
 $data = [
-    "abiertas" => 0,
-    "suspendidas" => 0,
-    "bloqueadas" => 0,
-    "finalizadas" => 0
+    "Abiertas" => 0,
+    "Suspendidas" => 0,
+    "Bloqueadas" => 0,
+    "Finalizadas" => 0
 ];
 $q = $conn->query("SELECT e.nombre_estado, COUNT(*) AS total
                    FROM sesiones s

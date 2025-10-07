@@ -102,8 +102,9 @@ if ($restringido == false) {
                     exit;
                 }
                 $tiempoRestante = $fechaProg ? ($fechaProg->getTimestamp() - $now->getTimestamp()) : $intervaloTiempo;
-                jsonOk(["estado" => "Abierto", "mensaje" => "Sesión abierta en curso","tiempo_restante" => $tiempoRestante]);
+                jsonOk(["estado" => "Abierto", "mensaje" => "Sesión abierta en curso"]);
                 exit;
+                break;
             case ESTADO_SUSPENDIDO:
                 if ($clave_admin) {
                     if ($clave_admin == $claveCorrecta) {
@@ -122,17 +123,17 @@ if ($restringido == false) {
                         jsonOk(["estado" => "Renovado", "mensaje" => "Sesión renovada, nueva sesión abierta"]);
                         exit;
                     }
-                } elseif ($cancel_suspend == "Cancelar" || $cancel_suspend || "Expirado" || $cancel_suspend == "Intentos") {
+                } elseif ($cancel_suspend == "Cancelar" or $cancel_suspend or "Expirado" or $cancel_suspend == "Intentos") {
                     actualizarEstado($conn, $last['id'], ESTADO_BLOQUEADO, $now->format('Y-m-d H:i:s'));
                     $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-                                $motivo = match ($cancel_suspend) {
-                "Cancelar" => "Sesión cancelada → Bloqueada",
-                "Expirado" => "Sesión expirada → Bloqueada",
-                "Intentos" => "Demasiados intentos fallidos → Bloqueada",
-                default => "Sesión bloqueada"
-            };
-            jsonOk(["estado" => "Bloqueado", "mensaje" => $motivo]);
-            exit;
+                    $motivo = match ($cancel_suspend) {
+                        "Cancelar" => "Sesión cancelada → Bloqueada",
+                        "Expirado" => "Sesión expirada → Bloqueada",
+                        "Intentos" => "Demasiados intentos fallidos → Bloqueada",
+                        default => "Sesión bloqueada"
+                    };
+                    jsonOk(["estado" => "Bloqueado", "mensaje" => $motivo]);
+                    exit;
                 } else {
                     $finSuspension = ($fechaProg ? clone $fechaProg : $now)->modify("+" . $tiempoSuspendido . " seconds");
                     if ($now >= $finSuspension) {
@@ -144,14 +145,34 @@ if ($restringido == false) {
                 }
                 break;
             case ESTADO_BLOQUEADO:
-                $finBloqueo = ($fechaProg ? clone $fechaProg : $now)->modify("+" . $esperaBloqueo . " seconds");
+                // Obtener el tiempo en que fue bloqueada
+                $fechaBloqueo = isset($last['fecha_final_real']) && !empty($last['fecha_final_real'])
+                    ? new DateTime($last['fecha_final_real'], new DateTimeZone('America/Bogota'))
+                    : $now;
+
+                // Calcular tiempo de espera real desde el bloqueo
+                $finBloqueo = clone $fechaBloqueo;
+                $finBloqueo->modify("+" . $esperaBloqueo . " seconds");
+
+                // Comparar y actualizar si corresponde
                 if ($now >= $finBloqueo) {
-                    actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO);
+                    actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
                     $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-                    jsonOk(["estado" => "Finalizado", "mensaje" => "Sesión finalizada"]);
+                    jsonOk([
+                        "estado" => "Finalizado",
+                        "mensaje" => "Sesión finalizada automáticamente después del bloqueo"
+                    ]);
+                    exit;
+                } else {
+                    $restante = $finBloqueo->getTimestamp() - $now->getTimestamp();
+                    jsonOk([
+                        "estado" => "Bloqueado",
+                        "mensaje" => "Sesión bloqueada en espera de finalización"
+                    ]);
                     exit;
                 }
                 break;
+
             case ESTADO_FINALIZADO:
                 $loanExist = loanExists($token, $folio_item_barcode);
                 $seccion = getUltimaSesion($conn, $userId, $id_equipo);
@@ -184,6 +205,14 @@ if ($restringido == false) {
                     $seccion = crearSesion($conn, $userId, $username_full, $id_equipo, $intervaloTiempo);
                     jsonOk(["estado" => "Abierto", "mensaje" => "Su sesion comenzará en breve"]);
                 }
+                break;
+            case 'Register':
+                $id_equipo = $data['id'] ?? 'desconocido';
+                $this->equipos[$id_equipo] = $from;
+                echo "💻 Equipo registrado: $id_equipo ({$from->resourceId})\n";
+                break;
+            case 'comando':
+                $this->enviarComandoCliente($data);
                 break;
             default:
                 jsonOk(["estado" => "Error", "mensaje" => "Flujo no reconocido en estado Suspendido"]);

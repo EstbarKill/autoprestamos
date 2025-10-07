@@ -495,3 +495,28 @@ if ($response.estado -eq "Restringido") {
     }
     # Ejecutar
     Show-VentanaSesion -Titulo "Gesti�n de Sesi�n con API"
+
+
+
+
+
+  <!-- 🔝 NAV SUPERIOR -->
+  <nav id="topbar" class="d-flex justify-content-between align-items-center px-4 py-2 shadow-sm">
+    <div class="d-flex align-items-center gap-2">
+      <img src="./assets/img/logo.png" alt="Unisimón" height="40" />
+      <h5 class="m-0 fw-bold text-success">Universidad Simón Bolívar</h5>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+      <span id="fechaActual" class="fw-semibold"></span>
+      <span id="estadoConexion" class="fw-bold text-success">🟢 Conectado</span>
+    </div>
+  </nav>
+
+  /* === TOPBAR === */
+#topbar {
+  background-color: #fff;
+  border-bottom: 3px solid #006b3f;
+  position: sticky;
+  top: 0;
+  z-index: 999;
+}

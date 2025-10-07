@@ -1,13 +1,26 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard Unisimón</title>
   <link rel="stylesheet" href="./assets/css/dashboard.css" />
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet" />
 </head>
+<!-- 🔝 NAV SUPERIOR -->
+<nav id="topbar" class="d-flex justify-content-between align-items-center px-4 py-2 shadow-sm">
+  <div class="d-flex align-items-center gap-2">
+    <img src="./assets/img/logo.png" alt="Unisimón" height="40" />
+    <h5 class="m-0 fw-bold text-success">Universidad Simón Bolívar</h5>
+  </div>
+  <div class="d-flex align-items-center gap-3">
+    <span id="fechaActual" class="fw-semibold"></span>
+    <span id="estadoConexion" class="fw-bold text-success">🟢 Conectado</span>
+  </div>
+</nav>
 
 <body>
   <div id="app" class="d-flex">
@@ -28,6 +41,11 @@
         <button class="btn btn-light w-100" onclick="mostrarPagina('mensajes')">
           <i class="bi bi-chat-dots"></i> Mensajes
         </button>
+      </div>
+      <div class="monitoreo">
+        <hr class="text-white" />
+        <h6 class="text-uppercase fw-bold mt-3 mb-2">Monitoreo en vivo</h6>
+        <div id="monitorEquipos" class="monitor-box"></div>
       </div>
 
       <hr class="text-white" />
@@ -99,7 +117,8 @@
       </div>
     </main>
   </div>
-  <script src="/dashboard-unisimon/assets/js/dashboard.js"></script>
-  <script src="/dashboard-unisimon/assets/js/websocket.js"></script>
+  <script src="./assets/js/dashboard.js"></script>
+  <script src="./assets/js/websocket.js"></script>
 </body>
+
 </html>

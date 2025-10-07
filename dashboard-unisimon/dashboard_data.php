@@ -1,5 +1,5 @@
 <?php
-include 'db.php';
+include '../autoprestamos/prueba_equipos/db.php';
 $filtro = isset($_GET['estado']) ? $_GET['estado'] : '';
 
 $sql = "SELECT s.*, e.nombre_estado 

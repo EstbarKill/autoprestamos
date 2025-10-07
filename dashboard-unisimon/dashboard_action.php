@@ -1,5 +1,5 @@
 <?php
-include '../prueba_equipos/db.php';
+include '../autoprestamos/prueba_equipos/db.php';
 header('Content-Type: application/json');
 
 $input = json_decode(file_get_contents("php://input"), true);
@@ -13,21 +13,21 @@ $accion = $input['accion'];
 $respuesta = ["status" => "ok", "accion" => $accion];
 
 switch ($accion) {
-    case "renovar":
+    case "Renovar":
         $sql = "UPDATE sesiones SET id_estado_fk = 2, 
                 fecha_final_programada = DATE_ADD(NOW(), INTERVAL 1 MINUTE)
                 WHERE id = $id";
         break;
 
-    case "suspender":
+    case "Suspender":
         $sql = "UPDATE sesiones SET id_estado_fk = 3 WHERE id = $id";
         break;
 
-    case "finalizar":
+    case "Finalizar":
         $sql = "UPDATE sesiones SET id_estado_fk = 1, fecha_final_real = NOW() WHERE id = $id";
         break;
 
-    case "bloquear":
+    case "Bloqueado":
         $sql = "UPDATE sesiones SET id_estado_fk = 4 WHERE id = $id";
         break;
 

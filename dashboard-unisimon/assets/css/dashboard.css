@@ -1,59 +1,133 @@
 body {
-  margin: 0;
-  background: url("../img/bg-campus.jpg") no-repeat center center fixed;
+  background: url("../img/fondo_unisimon.jpg") no-repeat center center fixed;
   background-size: cover;
   font-family: 'Segoe UI', sans-serif;
+  color: #222;
+  overflow: hidden;
 }
 
 #sidebar {
-  width: 280px;
-  min-height: 100vh;
-  background: linear-gradient(180deg, #40d88fbb 0%, #15861d96 100%);
-  color: white;
+  width: 250px;
+  min-height: 70vh;
   display: flex;
   flex-direction: column;
+  background: linear-gradient(180deg, #006b3f 0%, #004c2d 100%);
+  box-shadow: 2px 0 10px rgba(0,0,0,0.3);
 }
-
+#stats{
+  width: fit-content;
+  height: fit-content;
+  font-size: 2vh;
+}
 #sidebar .logo {
-  width: 100px;
+  width: 90px;
+  border-radius: 50%;
+  background-color: white;
+  padding: 5px;
 }
-
+.mt-auto{
+  margin-bottom: 30vh;
+}
 #main {
-  backdrop-filter: blur(8px);
-  background: rgba(255, 255, 255, 0.9);
+  background-color: rgba(255,255,255,0.9);
   border-radius: 12px;
-}
-
-.table-success {
-  background: #5f8661 !important;
+  margin-left: 20px;
+  flex-grow: 1;
+  box-shadow: 0 0 15px rgba(0,0,0,0.15);
 }
 
 .table-container {
-  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: white;
+}
+
+.toast-message {
+  position: fixed;
+  bottom: 25px;
+  right: 25px;
+  background: #006b3f;
+  color: #fff;
+  padding: 10px 20px;
   border-radius: 12px;
-  padding: 15px;
-  animation: fadeIn 0.4s ease-in;
+  box-shadow: 0 0 10px rgba(0,0,0,0.3);
+  font-weight: 500;
+  z-index: 9999;
+  opacity: 0.95;
+  animation: fadein 0.3s, fadeout 0.5s 3.5s;
 }
 
-.btn-success {
-  background-color: #1b5e20;
-  border: none;
+.monitor-box {
+  background: rgba(45, 163, 75, 0.815);
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 0.9em;
 }
 
-.btn-success:hover {
-  background-color: #145a24;
+.monitor-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background 0.3s ease;
+}
+
+.monitor-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.monitor-status {
+  font-weight: bold;
+}
+
+.monitor-status.online {
+  color: #00ff7f;
+  animation: pulseGreen 1.2s infinite;
+}
+
+.monitor-status.offline {
+  color: #ff4c4c;
+  animation: pulseRed 1.2s infinite;
+}
+
+@keyframes pulseGreen {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+@keyframes pulseRed {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeout {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translateY(20px); }
 }
 
 .pagina {
   display: none;
+  animation: fadein 0.4s ease-in-out;
 }
 
 .pagina.visible {
   display: block;
-  animation: fadeIn 0.5s ease-in;
 }
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  /* === TOPBAR === */
+#topbar {
+  background-color: #fff;
+  border-bottom: 3px solid #006b3f;
+  position: sticky;
+  top: 0;
+  z-index: 999;
 }
