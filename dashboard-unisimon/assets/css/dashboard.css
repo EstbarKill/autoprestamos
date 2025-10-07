@@ -1,36 +1,59 @@
-/* dashboard.css - estilo institucional Universidad Simón Bolívar */
-:root {
-  --unisimon-green: #007A33;
-  --unisimon-gold: #CBA135;
-  --unisimon-white: #FFFFFF;
-}
-
 body {
-  font-family: 'Segoe UI', sans-serif;
-  background: url('../img/background.jpg') no-repeat center center fixed;
+  margin: 0;
+  background: url("../img/bg-campus.jpg") no-repeat center center fixed;
   background-size: cover;
-  color: #222;
+  font-family: 'Segoe UI', sans-serif;
 }
 
-.navbar {
-  background-color: var(--unisimon-green);
-  color: var(--unisimon-white);
-  font-weight: bold;
+#sidebar {
+  width: 280px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #40d88fbb 0%, #15861d96 100%);
+  color: white;
+  display: flex;
+  flex-direction: column;
 }
 
-.sidebar {
-  background-color: var(--unisimon-green);
-  color: var(--unisimon-white);
-  border-right: 4px solid var(--unisimon-gold);
+#sidebar .logo {
+  width: 100px;
+}
+
+#main {
+  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 12px;
+}
+
+.table-success {
+  background: #5f8661 !important;
+}
+
+.table-container {
+  background: #fff;
+  border-radius: 12px;
   padding: 15px;
+  animation: fadeIn 0.4s ease-in;
 }
 
-.sidebar h4 {
-  color: var(--unisimon-gold);
-  font-weight: 600;
+.btn-success {
+  background-color: #1b5e20;
+  border: none;
 }
 
-.badge-Abierto { background: #28a745; }
-.badge-Suspendido { background: #ffc107; color: #000; }
-.badge-Bloqueado { background: #dc3545; }
-.badge-Finalizado { background: #6c757d; }
+.btn-success:hover {
+  background-color: #145a24;
+}
+
+.pagina {
+  display: none;
+}
+
+.pagina.visible {
+  display: block;
+  animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
