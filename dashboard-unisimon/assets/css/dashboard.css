@@ -1,0 +1,36 @@
+/* dashboard.css - estilo institucional Universidad Simón Bolívar */
+:root {
+  --unisimon-green: #007A33;
+  --unisimon-gold: #CBA135;
+  --unisimon-white: #FFFFFF;
+}
+
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: url('../img/background.jpg') no-repeat center center fixed;
+  background-size: cover;
+  color: #222;
+}
+
+.navbar {
+  background-color: var(--unisimon-green);
+  color: var(--unisimon-white);
+  font-weight: bold;
+}
+
+.sidebar {
+  background-color: var(--unisimon-green);
+  color: var(--unisimon-white);
+  border-right: 4px solid var(--unisimon-gold);
+  padding: 15px;
+}
+
+.sidebar h4 {
+  color: var(--unisimon-gold);
+  font-weight: 600;
+}
+
+.badge-Abierto { background: #28a745; }
+.badge-Suspendido { background: #ffc107; color: #000; }
+.badge-Bloqueado { background: #dc3545; }
+.badge-Finalizado { background: #6c757d; }

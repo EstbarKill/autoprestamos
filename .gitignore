@@ -1,0 +1,14 @@
+# Dependencias
+/vendor/
+/node_modules/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Configuración local
+.env
+*.log
+*.cache
+.idea/
+.vscode/

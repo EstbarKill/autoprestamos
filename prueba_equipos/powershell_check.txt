@@ -1,0 +1,386 @@
+# ============================================
+# COPIA FUNCIONAL - GESTIÓN DE SESIÓN (Backup)
+# ============================================
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+function Show-VentanaSesion {
+    param (
+        [string]$Titulo = "Gestión de Sesión",
+        [string]$ClaveAdmin = "S1m0n_2025",
+        [string]$LogoPath   = "C:\xampp\htdocs\autoprestamos\prueba_equipos\logo.png",
+        [string]$ApiUrl     = "http://localhost/autoprestamos/prueba_equipos/api.php"
+    )
+
+    # ==== Funciones auxiliares ====
+    function Format-Time([int]$segundos) {
+        $ts = [TimeSpan]::FromSeconds($segundos)
+        return "{0:00}:{1:00}:{2:00}" -f $ts.Hours, $ts.Minutes, $ts.Seconds
+    }
+
+    function Log($msg) {
+        Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] $msg"
+    }
+
+    # ==== Obtener usuario/IP/MAC ====
+    $Username = $env:USERNAME
+    $ip = (Get-NetIPAddress -AddressFamily IPv4 |
+        Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" -and $_.PrefixOrigin -ne "WellKnown" } |
+        Sort-Object InterfaceIndex | Select-Object -First 1 -ExpandProperty IPAddress) -as [string]
+    if ($ip) { $ip = $ip.Trim() }
+
+    $mac = (Get-NetAdapter | Where-Object { $_.Status -eq "Up" } |
+        Sort-Object InterfaceIndex | Select-Object -First 1 -ExpandProperty MacAddress) -as [string]
+    if ($mac) { $mac = $mac.Replace("-", ":") }
+
+    if (-not $ip -or -not $mac) {
+        Log "❌ No se pudo obtener IP o MAC. Abortando."
+        return
+    }
+
+    # ==== Función API ====
+    function Call-Api($extraBody = @{}) {
+        $body = @{ username = $Username; ip_address = $ip } + $extraBody
+        $json = $body | ConvertTo-Json -Compress
+        $headers = @{ "Content-Type" = "application/json" }
+
+        try {
+            $resp = Invoke-RestMethod -Uri $ApiUrl -Method Post -Headers $headers -Body $json -TimeoutSec 60
+            Log ("✔ Respuesta API: " + ($resp | ConvertTo-Json -Compress))
+            return $resp
+        }
+        catch [System.Net.WebException] {
+            $errorMsg = "⚠ Error de conexión con la API: $($_.Exception.Message)"
+            Log $errorMsg
+            return @{ estado="Error"; mensaje=$errorMsg }
+        }
+        catch {
+            $errorMsg = "⚠ Error inesperado: $($_.Exception.Message)"
+            Log $errorMsg
+            return @{ estado="Error"; mensaje=$errorMsg }
+        }
+    }
+
+    # ==== Interfaz gráfica ====
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Titulo
+    $form.Size = [System.Drawing.Size]::new(400,200)
+    $form.StartPosition = "Manual"
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.ShowInTaskbar = $true
+    $form.MinimizeBox = $true
+    $form.MaximizeBox = $false
+    $form.ControlBox = $true
+    $form.Location = [System.Drawing.Point]::new(
+        [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width - 400,
+        [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 250
+    )
+
+    $form.Add_FormClosing({
+        if ($_.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing) {
+            $_.Cancel = $true  # Evita cierre manual
+        }
+    })
+
+    $btnReducir = New-Object System.Windows.Forms.Button
+    $btnReducir.Text = "Minimizar"
+    $btnReducir.Size = [System.Drawing.Size]::new(80,28)
+    $btnReducir.Location = [System.Drawing.Point]::new($form.Width - 100, $form.Height - 68)
+    $btnReducir.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+    $btnReducir.Add_Click({
+        if ($form.Height -gt 120) {
+            $form.Refresh()
+            $logo.Size = [System.Drawing.Size]::new(170,60)
+            $logo.Location = [System.Drawing.Point]::new(0,0)
+            $form.Size = [System.Drawing.Size]::new(280,100)
+            $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",13,[System.Drawing.FontStyle]::Bold)
+            $labelInfo.Location = [System.Drawing.Point]::new(170,5)
+            $labelInfo.Text = "$($response.estado)"
+            $labelInfo.ForeColor = [System.Drawing.Color]::DarkGreen
+            $btnReducir.Text = "Maximizar"
+        } else {
+            $form.Refresh()
+            $logo.Size = [System.Drawing.Size]::new(110,80)
+            $logo.Location = [System.Drawing.Point]::new(10,10)
+            $labelInfo.Location = [System.Drawing.Point]::new(150,10)
+            $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+            $labelInfo.Text = "Usuario: $Username`nIP: $ip`nMAC: $mac"
+            $form.Size = [System.Drawing.Size]::new(400,200)
+            $btnReducir.Text = "Minimizar"
+        }
+    })
+    $form.Controls.Add($btnReducir)
+
+    # ==== Logo ====
+    $logo = New-Object System.Windows.Forms.PictureBox
+    $logo.SizeMode = "StretchImage"
+    $logo.Size = [System.Drawing.Size]::new(80,80)
+    $logo.Location = [System.Drawing.Point]::new(10,10)
+    try { $logo.Image = [System.Drawing.Image]::FromFile($LogoPath) } catch {}
+    $form.Controls.Add($logo)
+
+    # ==== Labels ====
+    $labelInfo = New-Object System.Windows.Forms.Label
+    $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",12)
+    $labelInfo.Location = [System.Drawing.Point]::new(100,10)
+    $labelInfo.AutoSize = $true
+    $form.Controls.Add($labelInfo)
+
+    $labelTimer = New-Object System.Windows.Forms.Label
+    $labelTimer.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
+    $labelTimer.Location = [System.Drawing.Point]::new(30,100)
+    $labelTimer.AutoSize = $true
+    $form.Controls.Add($labelTimer)
+
+    $form.Show()
+
+    # ==== Iniciar sesión ====
+    $response = Call-Api @{ confirmar_inicio = $true }
+
+    if ($response.estado -eq "Abierto" -or $response.estado -eq "Renovado") {
+        Start-Process -FilePath "explorer.exe"
+        while ($response -and $response.estado -ne "Finalizado") {
+            switch ($response.estado) {
+                "Abierto" {
+                $iniciado = $true
+                $labelInfo.Text = "Usuario: $Username`nIP: $ip`n MAC: $mac"
+                $labelTimer.ForeColor = [System.Drawing.Color]::DarkGreen
+                $tiempo = if ($response.tiempo_restante) { $response.tiempo_restante } else { 30 }
+                for ($i=$tiempo; $i -ge 0; $i--) {
+                    $labelTimer.Text = "?? SESI N ACTIVA - Restante: $(Format-Time $i)"
+                    $form.Refresh()
+                    $waitUntil = (Get-Date).AddSeconds(1)
+                    while ((Get-Date) -lt $waitUntil) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 50
+                    }
+                }
+                $response = Call-Api
+                }
+
+                "Suspendido" {
+                if (-not $global:SuspendidoProcesado) {
+                    $global:SuspendidoProcesado = $true
+
+                    # Crear modal de desbloqueo (ya lo hab as; aqu  lo usamos sin romper flujo)
+                    $modal = New-Object System.Windows.Forms.Form
+                    $modal.FormBorderStyle = 'None'
+                    $modal.StartPosition   = 'CenterScreen'
+                    $modal.Size            = [System.Drawing.Size]::new(400,250)
+                    $modal.BackColor       = [System.Drawing.Color]::FromArgb(240,240,240)
+                    $modal.TopMost         = $true
+
+                    $labelModal = New-Object System.Windows.Forms.Label
+                    $labelModal.Font      = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+                    $labelModal.Text      = "?? Sesi n suspendida. Ingrese clave:"
+                    $labelModal.AutoSize  = $true
+                    $labelModal.Location  = [System.Drawing.Point]::new(50,30)
+                    $modal.Controls.Add($labelModal)
+
+                    $script:progress = New-Object System.Windows.Forms.ProgressBar
+                    $script:progress.Location = [System.Drawing.Point]::new(50,70)
+                    $script:progress.Size     = [System.Drawing.Size]::new(300,20)
+                    $script:progress.Maximum  = 30
+                    $modal.Controls.Add($script:progress)
+
+                    $textBox = New-Object System.Windows.Forms.TextBox
+                    $textBox.UseSystemPasswordChar = $true
+                    $textBox.Width    = 200
+                    $textBox.Location = [System.Drawing.Point]::new(100,110)
+                    $modal.Controls.Add($textBox)
+
+                    $btnValidar = New-Object System.Windows.Forms.Button
+                    $btnValidar.Text     = "Validar"
+                    $btnValidar.Location = [System.Drawing.Point]::new(80,160)
+                    $modal.Controls.Add($btnValidar)
+
+                    $btnCancelar = New-Object System.Windows.Forms.Button
+                    $btnCancelar.Text     = "Cancelar"
+                    $btnCancelar.Location = [System.Drawing.Point]::new(200,160)
+                    $modal.Controls.Add($btnCancelar)
+
+                    # Flags de control
+                    $script:desbloqueado = $false
+                    $script:cancelado    = $false
+                    $script:intentosFails = $false
+                    $script:segundos     = 30
+                    $script:intentos     = 0
+
+                    # Eventos botones
+                    $btnValidar.Add_Click({
+                        if ($textBox.Text -eq $ClaveAdmin) {
+                            $script:desbloqueado = $true
+                            Log "? Clave correcta ingresada"
+                            $modal.Close()
+                        } else {
+                            $script:intentos++
+                            Log "? Clave incorrecta"
+                            $textBox.Clear(); $textBox.Focus()
+                        }
+                        if($script:intentos -gt 3){
+                            Log "? Demasiados intentos fallidos"
+                            $intentosFails = $true
+                        }
+                        if ($script:timer.Enabled) { $script:timer.Stop() }
+                    })
+                    $btnCancelar.Add_Click({
+                        $script:cancelado = $true
+                        Log "?? Usuario cancel  -> Bloqueado"
+                        if ($script:timer.Enabled) { $script:timer.Stop() }
+                        $modal.Close()
+                    })
+
+                    # Timer visual
+                    $script:timer = New-Object System.Windows.Forms.Timer
+                    $script:timer.Interval = 1000
+                    $script:timer.Add_Tick({
+                        if ($script:segundos -ge 0) {
+                            $script:progress.Value = $script:progress.Maximum - $script:segundos
+                            $script:segundos--
+                        } else {
+                            $script:timer.Stop()
+                            $modal.Close()
+                        }
+                    })
+                    $script:timer.Start()
+
+                    # Mostrar ventana sin bloquear flujo
+                    $modal.Show()
+
+                    # Nuevo bucle no bloqueante
+                    while ($response.estado -eq "Suspendido" -and $modal.Visible) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 100
+                        if ($script:desbloqueado) {
+                            $response = Call-Api @{ clave_admin = $ClaveAdmin }
+                            log $response
+                            break
+                        }
+                        if ($script:cancelado) {
+                            $response = Call-Api @{ cancel_suspend = "Cancelar" }
+                            break
+                        }
+
+                        if ($script:segundos -le 0) {
+                            $response = Call-Api @{ cancel_suspend = "Expirado" }
+                            break
+                        }
+                        if ($script:intentosFails) {
+                            $response = Call-Api @{ cancel_suspend = "Intentos" }
+                            break
+                        }
+                    }
+                }
+                }
+
+                "Bloqueado" {
+                $labelTimer.ForeColor = [System.Drawing.Color]::Red
+                # Verificar si el check-in fue exitoso
+                if ($response.folioCheckin -and $response.folioCheckin.raw -and $response.folioCheckin.raw.loan.status.name -eq "Closed") {
+                    Log "? Check-in exitoso detectado en estado Bloqueado"
+                    # Hacer una llamada adicional a la API para obtener el estado Finalizado
+                    $response = Call-Api
+                    $waitUntil = (Get-Date).AddSeconds(1)
+                    while ((Get-Date) -lt $waitUntil) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 50
+                    }
+                    continue
+                }
+
+                $tiempo = if ($response.tiempo_restante) { $response.tiempo_restante } else { 10 }
+                for ($i=10; $i -ge 0; $i--) {
+                    $labelTimer.Text = "?? BLOQUEADO - Restante: $(Format-Time $i)"
+                    $form.Refresh()
+                    $waitUntil = (Get-Date).AddSeconds(1)
+                    while ((Get-Date) -lt $waitUntil) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 50
+                    }
+                }
+                $response = Call-Api
+                }
+
+                "Renovado" {
+                $labelTimer.ForeColor = [System.Drawing.Color]::Blue
+                $labelTimer.Text = "?? Renovaci n en curso..."
+                $form.Refresh()
+                # Repetir consultas hasta que la API devuelva "Abierto" (o un estado distinto a 'Renovado'/'Renovando')
+                do {
+                    $response = Call-Api
+                    # esperar 1s amigable con UI
+                    $waitUntil = (Get-Date).AddSeconds(1)
+                    while ((Get-Date) -lt $waitUntil) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 50
+                    }
+                } while ($response.estado -eq "Renovado" -or $response.estado -eq "Renovando")
+                $response = Call-Api 
+                }
+
+                "Error" {
+    # En vez de MessageBox, mostrar pantalla negra fullscreen con el error
+    $errorForm = New-Object System.Windows.Forms.Form
+    $errorForm.FormBorderStyle = 'None'
+    $errorForm.WindowState     = 'Maximized'
+    $errorForm.BackColor       = [System.Drawing.Color]::Black
+    $errorForm.TopMost         = $true
+
+    $errorLabel = New-Object System.Windows.Forms.Label
+    $errorLabel.Text      = "❌ ERROR: $($response.mensaje)"
+    $errorLabel.ForeColor = [System.Drawing.Color]::Red
+    $errorLabel.Font      = New-Object System.Drawing.Font("Segoe UI", 40, [System.Drawing.FontStyle]::Bold)
+    $errorLabel.AutoSize  = $true
+
+    $errorForm.Add_Shown({
+        $errorLabel.Left = ($errorForm.ClientSize.Width  - $errorLabel.PreferredWidth)  / 2
+        $errorLabel.Top  = ($errorForm.ClientSize.Height - $errorLabel.PreferredHeight) / 2
+    })
+
+    $errorForm.Controls.Add($errorLabel)
+    $errorForm.Show()
+
+    # Mantener un ratito y cerrar sin interacción
+    Start-Sleep -Seconds 5
+    $errorForm.Close()
+    [System.Windows.Forms.Application]::Exit()
+    exit
+                }
+
+                Default {
+                    $labelTimer.Text = "⚙ Estado desconocido"
+                    Start-Sleep -Seconds 2
+                    $response = Call-Api
+                }
+            }
+        }
+    }
+
+    if ($response.estado -eq "Finalizado") {
+        $labelInfo.ForeColor = [System.Drawing.Color]::Blue
+        $labelTimer.Text = "✅ Sesión finalizada correctamente"
+        $form.Refresh()
+        Start-Sleep -Seconds 2
+        $form.Close()
+        Log "✅ Script finalizado completamente."
+    }
+
+    if ($response.estado -eq "Restringido") {
+        $labelTimer.ForeColor = [System.Drawing.Color]::Red
+        $labelTimer.Font = New-Object System.Drawing.Font("Arial", 18, [System.Drawing.FontStyle]::Bold)
+        $labelTimer.Text = "❌ ACCESO RESTRINGIDO ❌"
+
+        $labelInfo.ForeColor = [System.Drawing.Color]::DarkRed
+        $labelInfo.Text = "El usuario tiene bloqueos en FOLIO. Contacte al administrador."
+        $form.BackColor = [System.Drawing.Color]::LightCoral
+        $form.Refresh()
+
+        Start-Sleep -Seconds 5
+        $form.Close()
+        return
+    }
+}
+
+# === Ejecutar ===
+Show-VentanaSesion -Titulo "Gestión de Sesión con API"
