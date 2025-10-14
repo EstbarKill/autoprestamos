@@ -1,19 +1,21 @@
-body {
-  background: url("../img/fondo_unisimon.jpg") no-repeat center center fixed;
-  background-size: cover;
-  font-family: 'Segoe UI', sans-serif;
-  color: #222;
-  overflow: hidden;
+:root {
+  --verde: #1b6b2a;
+  --dorado: #cfae4a;
+  --blanco: #ffffff;
+  --bg: #f4f6f8;
 }
+body { font-family: "Segoe UI", Tahoma, sans-serif; background-image: url('../img/bg-pattern.jpg'); background-size: cover; background-color: var(--bg); margin:0; }
+#sidebar { width: 260px; min-height:100vh; background: linear-gradient(180deg,var(--verde), #0f4f1b); color:var(--blanco); }
+.logo { width: 96px; height:auto; border-radius:8px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
+.menu button { background: rgba(255,255,255,0.08); color:var(--blanco); border: none; transition: .18s; }
+.menu button:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.12); }
+.table-success { background: rgba(27,107,42,0.95); color: white; }
+.tabla-container { background: rgba(255,255,255,0.95); padding:15px; border-radius:10px; }
+.toast-message { position: fixed; right: 20px; bottom: 20px; background: rgba(27,107,42,0.95); color: white; padding:10px 14px; border-radius:8px; box-shadow:0 8px 20px rgba(0,0,0,0.12); z-index:9999; }
+.pagina { display:none; }
+.pagina.visible { display:block; animation: fadeIn .28s ease; }
+@keyframes fadeIn { from {opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
 
-#sidebar {
-  width: 250px;
-  min-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  background: linear-gradient(180deg, #006b3f 0%, #004c2d 100%);
-  box-shadow: 2px 0 10px rgba(0,0,0,0.3);
-}
 #stats{
   width: fit-content;
   height: fit-content;

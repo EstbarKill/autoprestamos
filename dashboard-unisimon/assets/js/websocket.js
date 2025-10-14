@@ -1,3 +1,4 @@
+// websocket.js
 let ws;
 
 function conectarWS() {
@@ -5,65 +6,45 @@ function conectarWS() {
 
   ws.onopen = () => {
     console.log("✅ Conectado al servidor WebSocket");
+    // pedir estado
     ws.send(JSON.stringify({ accion: "getEstado" }));
   };
 
   ws.onmessage = event => {
-    const data = JSON.parse(event.data);
-    switch (data.tipo) {
-      case "estado":
-        actualizarTabla(data.sesiones);
-        actualizarStats(data.stats);
-        break;
-
-case "monitor":
-  console.log("📡 Monitoreo recibido:", data.equipos);
-  actualizarMonitor(data.equipos);
-  break;
-
-      case "mensaje":
-        mostrarToast("💬 " + data.texto);
-        break;
+    try {
+      const data = JSON.parse(event.data);
+      switch (data.tipo) {
+        case "estado":
+          actualizarTabla(data.sesiones);
+          actualizarStats(data.stats);
+          break;
+        case "mensaje":
+          mostrarToast("💬 " + data.texto);
+          break;
+      }
+    } catch (err) {
+      console.error("Error parseando mensaje WS:", err, event.data);
     }
   };
 
   ws.onclose = () => {
-    console.warn("⚠️ Desconectado del WebSocket, intentando reconectar...");
+    console.warn("⚠️ Desconectado del WebSocket, reconectando en 2s...");
     setTimeout(conectarWS, 2000);
   };
 }
 
 conectarWS();
 
-// === AUTOREFRESH CADA 5 SEGUNDOS ===
+// refrescar cada 5s
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ accion: "getEstado" }));
   }
 }, 5000);
 
-// === TOAST VISUAL ===
-function mostrarToast(msg) {
-  const toast = document.createElement("div");
-  toast.className = "toast-message";
-  toast.textContent = msg;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 4000);
-}
-
-function actualizarMonitor(equipos) {
-  const contenedor = document.getElementById("monitorEquipos");
-  if (!contenedor) return;
-
-  contenedor.innerHTML = equipos.map(eq => {
-    const online = (Date.now() - new Date(eq.ultimo_ping).getTime()) < 20000;
-    return `
-      <div class="monitor-item">
-        <span>${eq.id}</span>
-        <span class="monitor-status ${online ? 'online' : 'offline'}">
-          ${online ? '🟢 Activo' : '🔴 Desconectado'}
-        </span>
-      </div>
-    `;
-  }).join('');
+// mandar comando a un equipo (a través del ws)
+function enviarComandoWS(comando, destino = "todos") {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return mostrarToast("⚠️ No conectado al WS");
+  ws.send(JSON.stringify({ accion: "comando", comando, destino }));
+  mostrarToast(`📨 Comando ${comando} enviado a ${destino}`);
 }

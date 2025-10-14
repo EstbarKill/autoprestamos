@@ -19,6 +19,7 @@
   <div class="d-flex align-items-center gap-3">
     <span id="fechaActual" class="fw-semibold"></span>
     <span id="estadoConexion" class="fw-bold text-success">🟢 Conectado</span>
+    <button class="btn btn-outline-success ms-2" onclick="iniciarServidor()">Conectar servidor</button>
   </div>
 </nav>
 
@@ -41,11 +42,6 @@
         <button class="btn btn-light w-100" onclick="mostrarPagina('mensajes')">
           <i class="bi bi-chat-dots"></i> Mensajes
         </button>
-      </div>
-      <div class="monitoreo">
-        <hr class="text-white" />
-        <h6 class="text-uppercase fw-bold mt-3 mb-2">Monitoreo en vivo</h6>
-        <div id="monitorEquipos" class="monitor-box"></div>
       </div>
 
       <hr class="text-white" />
@@ -74,7 +70,7 @@
             <option value="Bloqueado">Bloqueado</option>
             <option value="Finalizado">Finalizado</option>
           </select>
-          <button class="btn btn-outline-success ms-2" onclick="actualizarDatos()">🔄 Actualizar</button>
+          <button class="btn btn-outline-success ms-2" onclick="actualizarTabla()">🔄 Actualizar</button>
         </div>
 
         <div class="tabla-container shadow">
