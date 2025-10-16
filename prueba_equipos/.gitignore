@@ -1,0 +1,14 @@
+# Configuración sensible
+config.php
+
+# Logs
+*.log
+logs/
+
+# Archivos temporales
+tmp/
+*.tmp
+
+# Backup files
+*.bak
+*.backup
