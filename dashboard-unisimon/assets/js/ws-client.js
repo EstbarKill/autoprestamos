@@ -1,5 +1,5 @@
 // assets/js/ws-client.js
-const ws = new WebSocket("ws://localhost:8080");
+const ws = new WebSocket("ws://localhost:8081");
 
 ws.onopen = () => console.log("✅ Conectado al servidor WebSocket Unisimón");
 
@@ -17,22 +17,6 @@ function enviarMensajeGlobal() {
   const msg = prompt("Ingrese el mensaje global a enviar:");
   if (!msg) return;
   ws.send(JSON.stringify({ accion: "mensaje", mensaje: msg, destino: "todos" }));
-}
-
-function actualizarTabla(sesiones) {
-  const tbody = document.getElementById("tbodySesiones");
-  tbody.innerHTML = sesiones.map(s => `
-    <tr>
-      <td>${s.id}</td>
-      <td>${s.username}</td>
-      <td>${s.fecha_inicio || '-'}</td>
-      <td>${s.fecha_final_programada || '-'}</td>
-      <td><span class="badge bg-success">${s.nombre_estado}</span></td>
-      <td>
-        <button class="btn btn-sm btn-outline-info" onclick="verInfo(${s.id})">🔍</button>
-      </td>
-    </tr>
-  `).join('');
 }
 
 function actualizarEstadisticas(stats) {

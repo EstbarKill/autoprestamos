@@ -3,7 +3,7 @@
             Add-Type -AssemblyName System.Drawing
 
 # --- CONFIGURACIÓN ---
-$ServidorWS = "ws://localhost:8080"
+$ServidorWS = "ws://localhost:8081"
 $idEquipo   = $env:COMPUTERNAME
 $wsClient   = [System.Net.WebSockets.ClientWebSocket]::new()
 $uri        = [System.Uri]$ServidorWS
@@ -14,7 +14,7 @@ try {
     Write-Host "✅ Conectado al servidor WebSocket como $idEquipo"
 } catch {
     Write-Host "❌ Error al conectar con el servidor WebSocket: $($_.Exception.Message)"
-    exit
+    #exit
 }
 
 # --- REGISTRO DEL CLIENTE ---

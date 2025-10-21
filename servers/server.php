@@ -18,7 +18,7 @@ class DashboardServer implements MessageComponentInterface {
         $this->clients = new \SplObjectStorage;
         $this->equipos = [];
         $this->conn = $conn;
-        $this->log("🚀 Servidor WebSocket Unisimón (PHP) inicializado ws://localhost:8080");
+        $this->log("🚀 Servidor WebSocket Unisimón (PHP) inicializado ws://localhost:8081");
     }
    // === CONEXIÓN ABIERTA ===
     public function onOpen(ConnectionInterface $conn) {
@@ -215,12 +215,9 @@ class DashboardServer implements MessageComponentInterface {
     }
 }
 
-// Especificar el PID en el archivo antes de iniciar el servidor
-$pidFile = __DIR__ . '/server.pid';
-file_put_contents($pidFile, getmypid()); // Guardamos el PID del proceso
 
 $server = IoServer::factory(
     new HttpServer(new WsServer(new DashboardServer($conn))),
-    8080
+    8081
 );
 $server->run();

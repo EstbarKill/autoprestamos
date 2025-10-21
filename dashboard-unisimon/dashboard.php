@@ -20,7 +20,8 @@
     <span id="fechaActual" class="fw-semibold"></span>
     <span id="statusDot" style="width:15px;height:15px;border-radius:50%;display:inline-block;background:#d00;"></span>
     <span id="statusText" class="fw-bold text-success"></span>
-    <button id="toggleBtn" class="btn btn-outline-success md-1" onclick="toggleServidor()">Conectar</button>
+    <button class="btn btn-primary" id="btnEncenderServidor" onclick="manejoServidor()">Apagado</button>
+    <button id="toggleBtn" class="btn btn-outline-danger md-1" onclick="toggleServidor()">Conectar</button>
   </div>
 </nav>
 
@@ -39,6 +40,9 @@
         </button>
         <button class="btn btn-light w-100 mb-2" onclick="mostrarPagina('config')">
           <i class="bi bi-gear"></i> Configuración
+        </button>
+        <button class="btn btn-light w-100 mb-2" onclick="mostrarPagina('regist')">
+          <i class="bi bi-gear"></i> Registros
         </button>
         <button class="btn btn-light w-100" onclick="mostrarPagina('mensajes')">
           <i class="bi bi-chat-dots"></i> Mensajes
@@ -72,8 +76,43 @@
           </select>
           <button class="btn btn-outline-success ms-2" onclick="actualizarTabla()">🔄 Actualizar</button>
         </div>
+<!-- Modal de Información -->
+<div class="modal" tabindex="-1" id="modalInfo" aria-labelledby="modalInfoLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modalInfoLabel">Información de la Sesión</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <!-- Información del Usuario (izquierda) -->
+          <div class="col-md-6">
+            <h4>Información del Usuario</h4>
+            <ul id="usuarioInfo" class="list-unstyled">
+              <!-- Aquí se llenarán los datos del usuario dinámicamente -->
+            </ul>
+          </div>
+          
+          <!-- Información del Computador (derecha) -->
+          <div class="col-md-6">
+            <h4>Información del Computador</h4>
+            <ul id="computadorInfo" class="list-unstyled">
+              <!-- Aquí se llenarán los datos del computador dinámicamente -->
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 
         <div class="tabla-container shadow">
+          
           <table class="table table-hover align-middle text-center" id="tablaSesiones">
             <thead class="table-success text-white">
               <tr>
@@ -100,6 +139,15 @@
     <label>Clave de administrador:</label>
     <input type="password" id="config-clave" class="form-control mb-3" value="S1m0n_2025" />
     <button class="btn btn-success" onclick="guardarConfig()">💾 Guardar configuración</button>
+    </div>
+</div>
+<!-- === Registros === -->
+<div id="pagina-regist" class="pagina">
+    <h3>Circulación del Servidor WebSocket</h3>
+    <div id="logsRegistros" class="logs">
+        <div class="logsCirculacion">
+          <button onclick="obtenerLogsServidor()">Conectar</button>
+        </div>
     </div>
 </div>
 

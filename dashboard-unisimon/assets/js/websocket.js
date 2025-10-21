@@ -1,23 +1,29 @@
 // websocket.js
-let ws =null ;
+let ws = null;
 
 function conectarWS() {
-   if (ws && ws.readyState === WebSocket.OPEN) {
-    mostrarToast("⚠️ Ya estás conectado");
-    return;
-  }
-  ws = new WebSocket("ws://localhost:8080");
+
+  const btn = document.querySelector("#toggleBtn");
+  const dot = document.querySelector("#statusDot");
+
+  ws = new WebSocket("ws://localhost:8081");
 
   ws.onopen = () => {
-  document.querySelector("#statusDot").style.background = "#0d0";
-  document.querySelector("#toggleBtn").textContent = "Conectado";
-  document.querySelector("#toggleBtn").classList.remove("btn-outline-success");
-  document.querySelector("#toggleBtn").classList.add("btn-outline-success");
-  localStorage.setItem("seccion", true);;
-    ws.send(JSON.stringify({ accion: "getEstado" }));
+    btn.textContent = "Desconectar";
+    btn.classList.remove("btn-warning", "btn-outline-danger");
+    btn.classList.add("btn-success");
+    btn.style.hidden = "black";
+    localStorage.setItem("seccion", "true");
+    mostrarToast("🟢 Conectado al servidor WebSocket");
+    // Espera breve antes de solicitar estado
+    setTimeout(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ accion: "getEstado" }));
+      }
+    }, 500);
   };
 
-  ws.onmessage = event => {
+  ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
       switch (data.tipo) {
@@ -28,35 +34,54 @@ function conectarWS() {
         case "mensaje":
           mostrarToast("💬 " + data.texto);
           break;
+        default:
+          console.log("📡 Mensaje desconocido:", data);
       }
     } catch (err) {
-      console.error("Error parseando mensaje WS:", err, event.data);
+      console.error("❌ Error parseando mensaje WS:", err, event.data);
     }
   };
 
+  ws.onerror = (err) => {
+    console.error("⚠️ Error WebSocket:", err);
+    btn.textContent = "Error";
+    btn.classList.remove("btn-outline-success");
+    btn.classList.add("btn-outline-warning");
+    mostrarToast("❌ No se pudo conectar al servidor WebSocket");
+  };
+
   ws.onclose = () => {
-  document.querySelector("#statusDot").style.background = "rgba(255, 0, 0, 1)";
-  document.querySelector("#toggleBtn").textContent = "Desconectado";
-  document.querySelector("#toggleBtn").classList.remove("btn-outline-danger");
-  document.querySelector("#toggleBtn").classList.add("btn-outline-danger");
-  localStorage.setItem("seccion", false);
-    limpiarTabla(); // limpiar tabla al desconectarse
-    console.warn("⚠️ Desconectado del WebSocket, reconectando en 2s...");
-    setTimeout(conectarWS, 2000);
+    btn.textContent = "Conectar";
+    btn.classList.remove("btn-outline-success", "btn-warning");
+    btn.classList.add("btn-outline-danger");
+    localStorage.setItem("seccion", "false");
+    mostrarToast("🔴 Desconectado del WebSocket");
+        // Limpia tabla y estadísticas
+  mostrarDesconectado();
+  actualizarStats({ Abierto: 0, Suspendido: 0, Bloqueado: 0, Finalizado: 0 });
+    
   };
 }
 
+function desconectar() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+    mostrarToast("🛑 Desconectando del WebSocket...");
+  } else {
+    mostrarToast("⚠️ No hay conexión activa para cerrar");
+  }
+}
 
-// refrescar cada 5s
+// Refrescar cada 5s
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ accion: "getEstado" }));
   }
 }, 5000);
 
-// mandar comando a un equipo (a través del ws)
 function enviarComandoWS(comando, destino = "todos") {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return mostrarToast("⚠️ No conectado al WS");
+  if (!ws || ws.readyState !== WebSocket.OPEN)
+    return mostrarToast("⚠️ No conectado al WS");
   ws.send(JSON.stringify({ accion: "comando", comando, destino }));
   mostrarToast(`📨 Comando ${comando} enviado a ${destino}`);
 }

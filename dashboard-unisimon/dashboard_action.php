@@ -27,10 +27,6 @@ switch ($accion) {
         $sql = "UPDATE sesiones SET id_estado_fk = 4 WHERE id = ?";
         $mensaje = "Sesión bloqueada";
         break;
-    case "info":
-        $sql = "SELECT * FROM sesiones WHERE id = ?";
-        $mensaje = "Información de la sesión";
-        break;
     case "suspender":
         $sql = "UPDATE sesiones SET id_estado_fk = 3 WHERE id = ?";
         $mensaje = "Sesión suspendida";
