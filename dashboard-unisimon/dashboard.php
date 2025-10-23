@@ -20,7 +20,6 @@
     <span id="fechaActual" class="fw-semibold"></span>
     <span id="statusDot" style="width:15px;height:15px;border-radius:50%;display:inline-block;background:#d00;"></span>
     <span id="statusText" class="fw-bold text-success"></span>
-    <button class="btn btn-primary" id="btnEncenderServidor" onclick="manejoServidor()">Apagado</button>
     <button id="toggleBtn" class="btn btn-outline-danger md-1" onclick="toggleServidor()">Conectar</button>
   </div>
 </nav>
@@ -49,7 +48,6 @@
         </button>
       </div>
       <hr class="text-white" />
-
       <div id="stats" class="mt-auto">
         <h6 class="text-uppercase fw-bold mb-2">Estadísticas</h6>
         <ul class="list-unstyled" id="stats-list">
@@ -58,13 +56,26 @@
           <li>🔴 Bloqueados: <span id="stat-bloqueado">0</span></li>
           <li>⚫ Finalizados: <span id="stat-finalizado">0</span></li>
         </ul>
+            <!-- 🔔 Notificaciones en tiempo real -->
+<div class="mt-4">
+  <h5 class="text-success">📡 Registro en vivo</h5>
+  <div id="toast-container" class="position-fixed top-0 end-0 p-3" style="z-index: 9999;"></div>
+  <div id="logContainer" class="border border-success rounded p-3 bg-light text-dark"
+       style="height: 250px; width:225px; overflow-y: auto; font-size: 0.9rem;">
+    <p class="text-muted">Sin registros aún...</p>
+  </div>
+</div>
       </div>
     </aside>
+
+
+
+
 
     <!-- === CONTENIDO === -->
     <main id="main" class="flex-grow-1 p-4">
       <div id="pagina-panel" class="pagina visible">
-        <h2 class="mb-3">📊 Sesiones Activas</h2>
+        <h2 class="mb-3">📊 Monitoreo de Equipos  </h2>
 
         <div class="filtros mb-3">
           <select id="filtroEstado" class="form-select w-auto d-inline" onchange="filtrarTabla()">
@@ -130,17 +141,21 @@
       </div>
 
 <!-- === Configuración === -->
-<div id="pagina-config" class="pagina">
+
+ <div id="pagina-config" class="pagina">
   <h2>⚙️ Configuración</h2>
-  <p>Desde aquí podrás ajustar parámetros del sistema:</p>
+  <p>Parámetros del sistema:</p>
   <div class="config-box">
     <label>Tiempo de sesión (segundos):</label>
     <input type="number" id="config-tiempo" class="form-control mb-2" value="30" />
     <label>Clave de administrador:</label>
     <input type="password" id="config-clave" class="form-control mb-3" value="S1m0n_2025" />
     <button class="btn btn-success" onclick="guardarConfig()">💾 Guardar configuración</button>
+       <button class="btn btn-primary" id="btnEncenderServidor" onclick="manejoServidor()">Apagado</button> 
     </div>
-</div>
+   
+  </div>
+
 <!-- === Registros === -->
 <div id="pagina-regist" class="pagina">
     <h3>Circulación del Servidor WebSocket</h3>

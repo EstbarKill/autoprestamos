@@ -27,7 +27,12 @@ class DashboardServer implements MessageComponentInterface {
         // enviar estado inicial
         $this->enviarEstado($conn);
     }
-
+private function enviarMensajeSistema($texto) {
+    $payload = ["tipo" => "log", "mensaje" => $texto];
+    foreach ($this->clients as $client) {
+        $client->send(json_encode($payload));
+    }
+}
     // === MENSAJE ENTRANTE ===
     public function onMessage(ConnectionInterface $from, $msg) {
         $data = @json_decode($msg, true);
@@ -38,10 +43,7 @@ class DashboardServer implements MessageComponentInterface {
 
         // registro de equipo por si clientes (equipos) se identifiquen
         if (!empty($data['accion']) && $data['accion'] === 'Register' && !empty($data['id'])) {
-            $idEquipo = (string)$data['id'];
-            $this->equipos[$idEquipo] = $from;
-            $from->send(json_encode(["tipo"=>"info","mensaje"=>"Registrado","id"=>$idEquipo]));
-            $this->log("🔗 Equipo registrado: $idEquipo");
+        $this->enviarMensajeSistema("🖥️ Equipo {$data['íd']} conectado correctamente.");
             return;
         }
 

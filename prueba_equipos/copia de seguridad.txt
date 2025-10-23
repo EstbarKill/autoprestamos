@@ -1,6 +1,6 @@
-            # Cargar librer�as necesarias
-            Add-Type -AssemblyName System.Windows.Forms
-            Add-Type -AssemblyName System.Drawing
+# Cargar librer�as necesarias
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
 # --- CONFIGURACIÓN ---
 $ServidorWS = "ws://localhost:8081"
@@ -32,9 +32,6 @@ Write-Host "📡 Cliente registrado → ID: $idEquipo"
 # --- HILO DE ESCUCHA EN SEGUNDO PLANO ---
 Start-Job -Name "EscuchaWebSocket" -ScriptBlock {
     param($wsClient)
-
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
 
     $buffer = New-Object Byte[] 2048
 
@@ -137,10 +134,85 @@ Start-Job -Name "EscuchaWebSocket" -ScriptBlock {
 
                 # ===== Obtener usuario/IP/MAC =====
                 $Username = $env:USERNAME
+# Función para escuchar mensajes WebSocket y ejecutar acciones
+function Escuchar-WebSocket {
+    param ($wsClient)
+
+    $buffer = New-Object Byte[] 4096
+
+    while ($wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        $result = $wsClient.ReceiveAsync(
+            ([ArraySegment[byte]]$buffer),
+            [Threading.CancellationToken]::None
+        ).Result
+
+        if ($result.Count -gt 0) {
+            $jsonString = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+            try {
+                        
+                 $data = $mensaje | ConvertFrom-Json
+                 Write-Log "⚙️ Ejecutando acción: $($data.accion) para ID $($data.id)"
+                switch ($data.tipo) {
+                    "accion" {
+                        switch ($data.accion) {
+                            "bloquear" {
+                                Write-Host "🟥 Recibido comando: BLOQUEAR"
+                                rundll32.exe user32.dll,LockWorkStation
+                            }
+                            "suspender" {
+                                Write-Host "💤 Recibido comando: SUSPENDER"
+                                rundll32.exe powrprof.dll,SetSuspendState 0,1,0
+                            }
+                            "finalizar" {
+                                Write-Host "⛔ Recibido comando: FINALIZAR SESIÓN"
+                                shutdown /l /f
+                            }
+                            "renovar" {
+                                Write-Host "🔄 Recibido comando: RENOVAR SESIÓN"
+                                # Lógica interna para renovar tiempo
+                                [System.Windows.Forms.MessageBox]::Show("Sesión renovada correctamente","Autopréstamos")
+                            }
+                            "mensaje" {
+                                Write-Host "💬 Recibido mensaje: $($data.detalles.texto)"
+                                [System.Windows.Forms.MessageBox]::Show($data.detalles.texto,"Mensaje del administrador")
+                            }
+                            "ver_info" {
+                                Write-Host "ℹ️ Solicitud de información del cliente"
+                                $info = @{
+                                    usuario = $env:USERNAME
+                                    equipo = $env:COMPUTERNAME
+                                    ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | Select-Object -First 1).IPAddress
+                                    mac = (Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | Select-Object -First 1).MacAddress
+                                }
+                                $payload = @{
+                                    tipo = "info"
+                                    datos = $info
+                                } | ConvertTo-Json -Compress
+                                $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+                                $wsClient.SendAsync([ArraySegment[byte]]$bytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait()
+                            }
+                            default {
+                                Write-Host "❓ Acción desconocida: $($data.accion)"
+                            }
+                        }
+                    }
+                    default {
+                        Write-Host "📩 Tipo de mensaje desconocido: $($data.tipo)"
+                    }
+                }
+            }
+            catch {
+                Write-Host "❌ Error interpretando mensaje WebSocket: $_"
+            }
+        }
+    }
+}
+Start-Job -ScriptBlock { param($ws) Escuchar-WebSocket -wsClient $ws } -ArgumentList $wsClient
 
 # ================================
 # Detectar la interfaz con conexión a Internet activa
 # ================================
+if (-not (Test-Path $LogoPath)) { Write-Host "⚠️ Logo no encontrado: $LogoPath" }
 
 # Intentar identificar la interfaz con gateway activo (es la que tiene salida a Internet)
 $interfazActiva = Get-NetIPConfiguration |
@@ -218,6 +290,18 @@ if ($interfazActiva) {
                         # impedir cierre por usuario
                         $_.Cancel = $true
                     }
+try {
+    if ($wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        Write-Host "🔒 Cerrando salida WebSocket..."
+        $wsClient.CloseOutputAsync('NormalClosure', 'Fin de sesión', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        Start-Sleep -Milliseconds 300
+    }
+    Write-Host "✅ Canal de salida cerrado correctamente."
+} catch {
+    Write-Host "⚠️ Error al cerrar WebSocket de forma controlada: $($_.Exception.Message)"
+}
+
+
                 })
 
                 $btnReducir = New-Object System.Windows.Forms.Button
@@ -242,7 +326,7 @@ if ($interfazActiva) {
                         $logo.Location = [System.Drawing.Point]::new(10,10)
                         $labelInfo.Location = [System.Drawing.Point]::new(150,10)
                         $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
-                        $labelInfo.Text = "Usuario: $Username`nIP: $ip`n MAC: $mac"
+                        $labelInfo.Text = "Usuario: $Username`n MAC: $mac"
                         $form.Size = [System.Drawing.Size]::new(400,200)
                         $btnReducir.Text = "Minimizar"
                     }
@@ -294,7 +378,7 @@ if ($interfazActiva) {
                     switch ($response.estado) {
                         "Abierto" {
                             Start-Process -FilePath "explorer.exe"
-                            $labelInfo.Text = "Usuario: $Username`nIP: $ip`n MAC: $mac"
+                            $labelInfo.Text = "Usuario: $Username`n MAC: $mac"
                             $labelTimer.ForeColor = [System.Drawing.Color]::DarkGreen
                             $tiempo = if ($response.tiempo_restante) { $response.tiempo_restante } else { 30 }
                             for ($i=$tiempo; $i -ge 0; $i--) {
@@ -572,7 +656,7 @@ $response = Call-Api
             }
             # Acción manual (clic en cerrar)
             $btnReducir.Add_Click({
-                $timer.Stop()
+                $script:timer
                 $form.Close()
                 exit;
             })

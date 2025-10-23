@@ -1,24 +1,45 @@
-[2025-10-21 15:44:26] 📡 Detectado proceso escuchando en 8081 (PID 5448)
-[2025-10-21 15:44:32] ✔️ Servidor WebSocket activo (PID 5448)
-[2025-10-21 15:44:38] 🟥 Servidor detenido correctamente (PID: 5448).
-[2025-10-21 15:44:40] 🔴 No se detectó ningún proceso activo en 8081
-[2025-10-21 15:48:05] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
-[2025-10-21 15:48:10] 📡 Detectado proceso escuchando en 8081 (PID 6436)
-[2025-10-21 15:48:16] ✔️ Servidor WebSocket activo (PID 6436)
-[2025-10-21 15:48:17] 🟥 Servidor detenido correctamente (PID: 6436).
-[2025-10-21 15:48:20] 🔴 No se detectó ningún proceso activo en 8081
-[2025-10-21 15:51:39] 🔴 No se detectó ningún proceso activo en 8081
-[2025-10-21 15:51:42] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
-[2025-10-21 15:51:43] 📡 Detectado proceso escuchando en 8081 (PID 5860)
-[2025-10-21 15:51:46] 🟥 Servidor detenido correctamente (PID: 5860).
-[2025-10-21 15:51:47] 📡 Detectado proceso escuchando en 8081 (PID 8132)
-[2025-10-21 15:51:50] 🧹 Proceso no encontrado, PID eliminado (8132)
-[2025-10-21 15:51:50] 🔴 No se detectó ningún proceso activo en 8081
-[2025-10-21 15:52:40] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
-[2025-10-21 15:52:50] 📡 Detectado proceso escuchando en 8081 (PID 1680)
-[2025-10-21 15:52:52] 🟥 Servidor detenido correctamente (PID: 1680).
-[2025-10-21 15:52:53] 🔴 No se detectó ningún proceso activo en 8081
-[2025-10-21 15:55:40] 📡 Detectado proceso escuchando en 8081 (PID 8132)
-[2025-10-21 15:55:40] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
-[2025-10-21 15:56:46] 🧹 Proceso no encontrado, PID eliminado (8132)
-[2025-10-21 15:56:46] 📡 Detectado proceso escuchando en 8081 (PID 16116)
+[2025-10-21 21:25:56] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:26:23] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:34:57] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:37:21] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:37:39] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:40:41] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:41:14] ✔️ Servidor WebSocket activo (PID 20080)
+[2025-10-21 21:41:40] 🟥 Servidor detenido correctamente (PID: 20080).
+[2025-10-21 21:41:57] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:42:02] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:42:13] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:42:22] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:42:36] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:42:45] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:42:54] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:43:37] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:43:41] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:43:56] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:44:06] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:44:10] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:44:17] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:44:33] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
+[2025-10-21 21:44:34] 📡 Detectado proceso escuchando en 8081 (PID 12472)
+[2025-10-21 21:45:31] ✔️ Servidor WebSocket activo (PID 12472)
+[2025-10-21 21:45:34] 🟥 Servidor detenido correctamente (PID: 12472).
+[2025-10-21 21:45:35] ❌ Intento de detener sin PID activo.
+[2025-10-21 21:45:36] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 21:45:40] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
+[2025-10-21 21:45:40] 📡 Detectado proceso escuchando en 8081 (PID 10076)
+[2025-10-21 21:58:45] ✔️ Servidor WebSocket activo (PID 10076)
+[2025-10-21 21:58:50] ✔️ Servidor WebSocket activo (PID 10076)
+[2025-10-21 22:01:00] ✔️ Servidor WebSocket activo (PID 10076)
+[2025-10-21 22:01:19] ✔️ Servidor WebSocket activo (PID 10076)
+[2025-10-21 22:01:30] ✔️ Servidor WebSocket activo (PID 10076)
+[2025-10-21 22:01:45] 🟥 Servidor detenido correctamente (PID: 10076).
+[2025-10-21 22:01:46] ❌ Intento de detener sin PID activo.
+[2025-10-21 22:01:52] ❌ Intento de detener sin PID activo.
+[2025-10-21 22:01:56] 🔴 No se detectó ningún proceso activo en 8081
+[2025-10-21 22:02:00] 🚀 Ejecutando: start "" /B php "C:\xampp\htdocs\autoprestamos\servers\server.php"
+[2025-10-21 22:02:02] 📡 Detectado proceso escuchando en 8081 (PID 15056)
+[2025-10-21 22:13:50] ✔️ Servidor WebSocket activo (PID 15056)
+[2025-10-21 22:15:39] ✔️ Servidor WebSocket activo (PID 15056)
+[2025-10-21 22:22:39] ✔️ Servidor WebSocket activo (PID 15056)
+[2025-10-21 22:24:39] ✔️ Servidor WebSocket activo (PID 15056)
+[2025-10-21 23:18:40] ✔️ Servidor WebSocket activo (PID 15056)
