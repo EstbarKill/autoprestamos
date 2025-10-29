@@ -12,10 +12,40 @@ const WS_URL =
   (location.protocol === "https:" ? "wss" : "ws") + "://localhost:8081";
 
 // Verificar automáticamente al cargar la página
-document.addEventListener("DOMContentLoaded", verificarServidor);
+document.addEventListener("DOMContentLoaded", function() {
+  verificarServidor();
+  mostrarDesconectado();
+  document.getElementById("fechaActual").textContent = new Date().toLocaleString();
+});
+
+// 🟢 FUNCIÓN CORREGIDA - Conectar Dashboard
 function conectarD() {
-  conectarWS();
-  conectado = true;
+  if (typeof conectarWS === 'function') {
+    conectarWS();
+    conectado = true;
+  } else {
+    console.error('conectarWS no está definido');
+    mostrarToast('❌ Error: WebSocket no disponible');
+  }
+}
+
+// 🔴 FUNCIÓN CORREGIDA - Desconectar
+function desconectar() {
+  if (confirm("⚠️ ¿Deseas desconectar del servidor WebSocket?")) {
+    if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+      console.log("🔌 Conexión WebSocket cerrada correctamente.");
+      conectado = false;
+      
+      // Actualizar UI
+      const btn = document.querySelector("#toggleBtn");
+      const dot = document.querySelector("#statusDot");
+      btn.textContent = "Conectar";
+      btn.classList.remove("btn-success");
+      btn.classList.add("btn-outline-danger");
+      dot.style.background = "#d00";
+    }
+  }
 }
 
 async function verificarServidor() {
@@ -76,29 +106,38 @@ function mostrarDesconectado() {
   tbody.appendChild(fila);
 }
 
-function desconectar() {
-  if (
-    confirm("⚠️ El servidor WebSocket está en ejecución.\n¿Deseas apagarlo?")
-  ) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.close();
-      console.log("🔌 Conexión WebSocket cerrada correctamente.");
-      conectado = false;
-    } else {
-      console.warn("⚠️ No hay conexión activa para cerrar.");
-    }
+// 🔄 FUNCIÓN CORREGIDA - Toggle Servidor
+function toggleServidor() {
+  if (conectado) {
+    desconectar();
   } else {
-    mostrarToast("❌ Operación cancelada por el usuario.");
+    conectarD();
   }
 }
 
-// toggleServidor arreglado
-function toggleServidor() {
-  if (conectado) {
-    desconectar(); // desconecta WS
-  } else {
-    conectarD(); // conecta WS
-  }
+// 📊 FUNCIÓN CORREGIDA - Fetch Estado
+async function fetchEstado() {
+    try {
+        console.log("🌐 Solicitando estado via HTTP...");
+        // 1) pedir stats
+        const statsRes = await fetch('./dashboard_stats.php');
+        const stats = await statsRes.json();
+        actualizarStats(stats);
+
+        // 2) pedir sesiones
+        const sesionesRes = await fetch('./get_sesiones.php');
+        const sesiones = await sesionesRes.json();
+        if (Array.isArray(sesiones)) {
+            console.log("📥 Sesiones recibidas via HTTP:", sesiones.length);
+            actualizarTabla(sesiones);
+        } else {
+            console.warn("❌ Respuesta de sesiones no es array:", sesiones);
+        }
+    } catch (err) {
+        console.warn('❌ No se pudo cargar estado via HTTP:', err);
+        mostrarDesconectado();
+        actualizarStats({Abierto:0, Suspendido:0, Bloqueado:0, Finalizado:0});
+    }
 }
 
 // dashboard.js (resumen funcional)
@@ -145,6 +184,7 @@ function actualizarDatos() {
     mostrarToast("⚠️ WebSocket no conectado");
   }
 }
+
 async function manejoServidor() {
   if (conectado_server) {
     detenerServidor();
@@ -168,7 +208,7 @@ function iniciarServidor() {
       const responseData = JSON.parse(data);
       if (responseData.status === "iniciado") {
         mostrarToast("🚀 " + responseData.mensaje);
-        btn.textContent = "Encendid2o";
+        btn.textContent = "Encendido";
         btn.classList.remove("btn-warning");
         btn.classList.add("btn-success");
         conectado_server = true;
@@ -209,7 +249,6 @@ function detenerServidor() {
     .then((data) => {
       console.log("Respuesta cruda al detener:", data);
       const responseData = JSON.parse(data);
-
       if (responseData.status === "detenido") {
         mostrarToast("🔴 " + responseData.mensaje);
         btn.textContent = "Apagado";
@@ -232,80 +271,114 @@ function detenerServidor() {
     });
 }
 
-// llamada segura para actualizar tabla desde otras funciones
+// ✅ FUNCIÓN CORREGIDA - actualizarTabla
 function actualizarTabla(sesiones) {
-  const tbody = document.querySelector("#tablaSesiones tbody");
-  if (!tbody) return;
-  // si no pasan sesiones, intentamos obtener vía HTTP o WS
-  if (!sesiones) {
-    // si WS está abierto, pedir estado
-    if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ accion: "getEstado" }));
-      return;
-    } else {
-      // fallback HTTP
-      fetchEstado();
-      return;
+    const tbody = document.querySelector("#tablaSesiones tbody");
+    if (!tbody) {
+        console.error("❌ No se encontró tbody en la tabla");
+        return;
     }
-  }
-// Fetch inicial de estado / sesiones desde backend (si WS no está disponible)
-async function fetchEstado() {
-  try {
-    // 1) pedir stats
-    const statsRes = await fetch('./dashboard_stats.php');
-    const stats = await statsRes.json();
-    actualizarStats(stats);
 
-    // 2) pedir sesiones (crea get_sesiones.php si no existe - abajo muestro ejemplo)
-    const sesionesRes = await fetch('./get_sesiones.php');
-    const sesiones = await sesionesRes.json();
-    if (Array.isArray(sesiones)) {
-      actualizarTabla(sesiones);
+    console.log("📊 Actualizando tabla con", sesiones?.length, "sesiones");
+    
+    // Si no pasan sesiones, intentamos obtener vía HTTP o WS
+    if (!sesiones || sesiones.length === 0) {
+        console.log("ℹ️ No hay sesiones, intentando obtener...");
+        // Si WS está abierto, pedir estado
+        if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ accion: "getEstado" }));
+            return;
+        } else {
+            // fallback HTTP
+            fetchEstado();
+            return;
+        }
     }
-  } catch (err) {
-    console.warn('No se pudo cargar estado via HTTP:', err);
-    // si falla, mostrar desconectado visual
-    mostrarDesconectado();
-    actualizarStats({Abierto:0,Suspendido:0,Bloqueado:0,Finalizado:0});
-  }
+
+    tbody.innerHTML = "";
+    
+    sesiones.forEach((s) => {
+        const tr = document.createElement("tr");
+        // 🟢 AGREGAR DATA ATTRIBUTES PARA DEBUGGING
+        tr.setAttribute('data-sesion-id', s.id);
+        tr.setAttribute('data-username', s.username || '');
+        tr.setAttribute('data-estado', s.nombre_estado || '');
+        tr.setAttribute('data-pc', s.nombre_pc || '');
+        
+        tr.innerHTML = `
+            <td class="text-${estadoColor(s.nombre_estado)}">${s.id}</td>
+            <td class="text-${estadoColor(s.nombre_estado)}">${s.username ?? s.usuario ?? '-'}</td>
+            <td class="text-${estadoColor(s.nombre_estado)}">${s.nombre_pc || 'Desconocido'}</td>
+            <td class="text-${estadoColor(s.nombre_estado)}">${s.fecha_inicio || "-"}</td>
+            <td class="text-${estadoColor(s.nombre_estado)}">${s.fecha_final_programada || "-"}</td>
+            <td class="text-${estadoColor(s.nombre_estado)}">${s.fecha_final_real || "-"}</td>
+            <td><span class="badge bg-${estadoColor(s.nombre_estado)}">${s.nombre_estado || '-'}</span></td>
+            <td>
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-light dropdown-toggle" data-bs-toggle="dropdown" 
+                            onclick="console.log('🖱️ Click en acciones para sesión:', ${s.id}, 'usuario:', '${s.username}')">
+                        ⚙️
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="#" onclick="verInfo(${s.id})">🔍 Ver Info</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'mensaje')">📜 Mensaje</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'suspender')">⏸ Suspender</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'renovar')">♻️ Renovar</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'finalizar')">⛔ Finalizar</a></li>
+                        <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'bloquear')">🚫 Bloquear</a></li>
+                    </ul>
+                </div>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+    
+    console.log("✅ Tabla actualizada con", sesiones.length, "registros");
 }
-  tbody.innerHTML = "";
-  sesiones.forEach((s) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${s.id}</td>
-      <td>${s.username ?? s.usuario ?? '-'}</td>
-      <td>${s.fecha_inicio || "-"}</td>
-      <td>${s.fecha_final_programada || "-"}</td>
-      <td><span class="badge bg-${estadoColor(s.nombre_estado)}">${s.nombre_estado || '-'}</span></td>
-      <td>
-        <div class="dropdown">
-          <button class="btn btn-sm btn-outline-light dropdown-toggle" data-bs-toggle="dropdown">⚙️</button>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="#" onclick="verInfo('${s.username}',${s.id})">🔍 Ver Info</a></li>
-            <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'mensaje')">📜 Mensaje</a></li>
-            <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'suspender')">⏸ Suspender</a></li>
-            <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'renovar')">♻️ Renovar</a></li>
-            <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'finalizar')">⛔ Finalizar</a></li>
-            <li><a class="dropdown-item" href="#" onclick="accionSesion(${s.id}, 'bloquear')">🚫 Bloquear</a></li>
-          </ul>
-        </div>
-      </td>
-    `;
-    tbody.appendChild(tr);
+
+// 📝 FUNCIÓN NUEVA - Ver Info con Datos Reales
+function verInfo(id) {
+  // Obtener información detallada del servidor
+  fetch("./dashboard_action.php", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accion: "info", id: id })
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.status === "ok" && data.data) {
+      const info = data.data;
+      
+      // Llenar información del usuario
+      document.getElementById("usuarioInfo").innerHTML = `
+        <li><strong>ID:</strong> ${info.id}</li>
+        <li><strong>Usuario:</strong> ${info.username || 'N/A'}</li>
+        <li><strong>Estado:</strong> ${info.nombre_estado || 'N/A'}</li>
+        <li><strong>Inicio:</strong> ${info.fecha_inicio || 'N/A'}</li>
+        <li><strong>Fin Programado:</strong> ${info.fecha_final_programada || 'N/A'}</li>
+      `;
+      
+      // Llenar información del computador (puedes expandir esto)
+      document.getElementById("computadorInfo").innerHTML = `
+        <li><strong>IP:</strong> Por implementar</li>
+        <li><strong>Hostname:</strong> Por implementar</li>
+        <li><strong>Sistema:</strong> Por implementar</li>
+        <li><strong>Última Actividad:</strong> ${info.fecha_inicio || 'N/A'}</li>
+      `;
+      
+      // Mostrar modal
+      var myModal = new bootstrap.Modal(document.getElementById("modalInfo"));
+      myModal.show();
+    } else {
+      mostrarToast("❌ No se pudo obtener información de la sesión", "danger");
+    }
+  })
+  .catch(err => {
+    console.error("Error al obtener info:", err);
+    mostrarToast("❌ Error al obtener información", "danger");
   });
 }
-function verInfo(username, id) {
-  username = username;
-  id = id;
-  // Llamar al backend para obtener la información detallada
-  // Mostrar el modal (esto dependerá de tu implementación de Bootstrap)
-  var myModal = new bootstrap.Modal(document.getElementById("modalInfo"), {
-    keyboard: false,
-  });
-  myModal.show();
-  mostrarToast(username + " id " + id);
-}
+
 
 function estadoColor(e) {
   switch (e) {
@@ -316,7 +389,7 @@ function estadoColor(e) {
     case "Bloqueado":
       return "danger";
     case "Finalizado":
-      return "secondary";
+      return "dark";
     default:
       return "light";
   }
@@ -330,52 +403,79 @@ function filtrarTabla() {
   });
 }
 
-// 🔄 accionSesion: envía comando al backend y al WebSocket
+// 🎯 FUNCIÓN MEJORADA - Acción Sesión con Debugging Completo
 function accionSesion(id, accion) {
-  if (!confirm(`¿Estás seguro de ejecutar la acción '${accion}' sobre la sesión ${id}?`)) return;
-
-  // Petición HTTP al backend (para registro en BD, logs, etc.)
-  fetch("./dashboard_action.php", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ accion, id })
-  })
-  .then(res => res.json())
-  .then(data => {
-    if (data.status === "ok") {
-      mostrarToast(data.mensaje || "Operación correcta", "success");
-
-      // ✅ Enviar al WebSocket para ejecución en el cliente PowerShell
-      if (typeof ws !== "undefined" && ws.readyState === WebSocket.OPEN) {
-        const payload = {
-          tipo: "control",
-          id: id,
-          accion: accion,
-          timestamp: new Date().toISOString()
-        };
-        ws.send(JSON.stringify(payload));
-        console.log("📡 Acción enviada al PowerShell:", payload);
-      } else {
-        console.warn("⚠️ WebSocket no conectado. Solo se ejecutó en el backend.");
-      }
-
-      // 🔁 Refrescar estado general
-      if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ accion: "getEstado" }));
-      } else {
-        fetchEstado();
-      }
-
-    } else {
-      mostrarToast(`Error: ${data.mensaje}`, "danger");
+    console.log(`🎯 Iniciando acción: ${accion} para sesión: ${id}`);
+    
+    // Obtener información de la fila para debugging
+    const fila = document.querySelector(`tr[data-sesion-id="${id}"]`);
+    const username = fila ? fila.getAttribute('data-username') : 'desconocido';
+    const estado = fila ? fila.getAttribute('data-estado') : 'desconocido';
+    const nombre_pc = fila ? fila.getAttribute('data-pc') : 'desconocido';
+    
+    console.log(`📋 Detalles sesión - ID: ${id}, Usuario: ${username}, Estado: ${estado}`);
+    
+    if (!confirm(`¿Estás seguro de ejecutar '${accion}' en la sesión ${id} del equipo (${nombre_pc})`)) {
+        console.log("❌ Usuario canceló la acción");
+        return;
     }
-  })
-  .catch(err => {
-    console.error(err);
-    mostrarToast("Ocurrió un error al ejecutar la acción.", "danger");
-  });
-}
 
+    // 🟢 1️⃣ Primero enviar comando via WebSocket (para ejecución inmediata en PowerShell)
+    if (typeof ws !== "undefined" && ws && ws.readyState === WebSocket.OPEN) {
+        const payload = {
+        tipo: "comando",
+        accion: accion,       // suspender, bloquear, etc.
+        nombre_pc: nombre_pc,         // nombre del equipo o ID
+        origen: "dashboard",
+        timestamp: new Date().toISOString()
+        };
+        
+        console.log("📡 Enviando comando WebSocket:", payload);
+        ws.send(JSON.stringify(payload));
+        mostrarToast(`⚡ Comando ${accion} enviado a equipo ${username}`, "success");
+        
+    } else {
+        console.error("❌ WebSocket no disponible para enviar comando");
+        mostrarToast("⚠️ WebSocket desconectado - Comando no enviado", "warning");
+    }
+
+    // 🟢 2️⃣ Luego actualizar base de datos (para persistencia)
+    console.log(`💾 Registrando acción en BD: ${accion} para sesión ${id}`);
+    fetch("./dashboard_action.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accion, id })
+    })
+    .then(res => {
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return res.json();
+    })
+    .then(data => {
+        console.log("✅ Respuesta BD:", data);
+        if (data.status === "ok") {
+            mostrarToast(`✅ ${data.mensaje}`, "success");
+            
+            // 🟢 3️⃣ Actualizar interfaz después de 1 segundo
+            setTimeout(() => {
+                console.log("🔄 Actualizando interfaz...");
+                if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ accion: "getEstado" }));
+                } else {
+                    fetchEstado();
+                }
+            }, 1000);
+        } else {
+            console.error("❌ Error en BD:", data.mensaje);
+            mostrarToast(`❌ Error: ${data.mensaje}`, "danger");
+        }
+    })
+    .catch(err => {
+        console.error("❌ Error al registrar acción:", err);
+        mostrarToast("❌ Error al registrar acción en BD", "danger");
+    });
+}
 
 function guardarConfig() {
   const tiempo = document.getElementById("config-tiempo").value;
@@ -415,34 +515,6 @@ function mostrarToast(msg) {
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 4000);
 }
-// Función que obtiene los logs del servidor WebSocket
-function obtenerLogsServidor() {
-  fetch("../../servers/server.log")
-    .then((response) => response.text()) // Obtener el archivo de logs como texto
-    .then((data) => {
-      // Mostramos los logs en un div específico de "Circulación"
-      document.getElementById("logsCirculacion").innerText = data;
-    })
-    .catch((error) => {
-      console.error("Error al obtener los logs del servidor:", error);
-    });
-}
-
-// === Sistema de notificaciones ===
-function mostrarToast(mensaje, tipo = "info") {
-  const toast = document.createElement("div");
-  toast.className = `toast align-items-center text-bg-${tipo} border-0 show`;
-  toast.role = "alert";
-  toast.innerHTML = `
-    <div class="d-flex">
-      <div class="toast-body">${mensaje}</div>
-      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-    </div>
-  `;
-  toastContainer.appendChild(toast);
-
-  setTimeout(() => toast.remove(), 5000); // Desaparece en 5 segundos
-}
 
 function agregarLog(mensaje, tipo = "info") {
   const timestamp = new Date().toLocaleTimeString();
@@ -472,8 +544,6 @@ function limpiarLogsViejos() {
     logContainer.innerHTML = "<p class='text-muted'>Sin registros recientes...</p>";
   }
 }
-
-
 
 // al cargar la página: mostrar desconectado y cargar estado HTTP como fallback
 document.addEventListener("DOMContentLoaded", () => {

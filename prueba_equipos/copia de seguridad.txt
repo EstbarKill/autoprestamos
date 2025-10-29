@@ -1,14 +1,30 @@
+# =============================================
+# 🧩 CLIENTE AUTOPRÉSTAMOS - UNISIMÓN (PowerShell)
+# Comunicación WebSocket + API + Control local
+# Autor: Sistema Autopréstamos
+# Versión: 1.5 (24-Oct-2025)
+# =============================================
+
+
+# =============================================
 # Cargar librer�as necesarias
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+# =============================================
 
+# =============================================
 # --- CONFIGURACIÓN ---
 $ServidorWS = "ws://localhost:8081"
 $idEquipo   = $env:COMPUTERNAME
 $wsClient   = [System.Net.WebSockets.ClientWebSocket]::new()
 $uri        = [System.Uri]$ServidorWS
+$LogoPath   = "C:\xampp\htdocs\autoprestamos\dashboard-unisimon\assets\img\logo.png"
+# =============================================
 
-Write-Host "🔌 Conectando a $ServidorWS ..."
+                function Log($msg) {
+                    Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] $msg"
+                }
+# =============================================
 try {
     $wsClient.ConnectAsync($uri, [Threading.CancellationToken]::None).Wait()
     Write-Host "✅ Conectado al servidor WebSocket como $idEquipo"
@@ -16,7 +32,21 @@ try {
     Write-Host "❌ Error al conectar con el servidor WebSocket: $($_.Exception.Message)"
     #exit
 }
+# =============================================
 
+# =============================================
+function Test-ServidorActivo {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://localhost/autoprestamos/servers/estado_server.php" -UseBasicParsing -TimeoutSec 3
+        $json = $resp.Content | ConvertFrom-Json
+        return $json.status -eq "corriendo"
+    } catch {
+        return $false
+    }
+}
+# =============================================
+
+# =============================================
 # --- REGISTRO DEL CLIENTE ---
 $msgJson = @{
     accion = "UpdateStatus"
@@ -25,61 +55,205 @@ $msgJson = @{
 
 $msgBytes = [System.Text.Encoding]::UTF8.GetBytes($msgJson)
 $segment  = [System.ArraySegment[byte]]::new($msgBytes)
-$wsClient.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait()
+# =============================================
 
-Write-Host "📡 Cliente registrado → ID: $idEquipo"
+# =============================================
+# --- REGISTRO DE CLIENTE ---
+function Registrar-Cliente {
+    $msgJson = @{
+        accion = "UpdateStatus"
+        id     = $env:COMPUTERNAME
+    } | ConvertTo-Json
 
-# --- HILO DE ESCUCHA EN SEGUNDO PLANO ---
-Start-Job -Name "EscuchaWebSocket" -ScriptBlock {
-    param($wsClient)
+    $msgBytes = [System.Text.Encoding]::UTF8.GetBytes($msgJson)
+    $segment  = [System.ArraySegment[byte]]::new($msgBytes)
 
-    $buffer = New-Object Byte[] 2048
+    try {
+        $global:wsClient.SendAsync(
+            $segment,
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            [Threading.CancellationToken]::None
+        ).Wait()
+        Log "📡 Cliente registrado → ID: $idEquipo"
+    } catch {
+        Log "❌ Error al registrar cliente: $($_.Exception.Message)"
+    }
+}
+
+# ============================================================
+# 🧩 ESCUCHA DE MENSAJES EN TIEMPO REAL (Dashboard ↔ Servidor)
+# ============================================================
+function Escuchar-WebSocket {
+    param ($wsClient)
+
+    $buffer = New-Object Byte[] 4096
 
     while ($wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
         try {
-            $result = $wsClient.ReceiveAsync([ArraySegment[byte]]$buffer, [Threading.CancellationToken]::None).Result
-            if ($result.Count -gt 0) {
-                $msg = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
-                $data = ConvertFrom-Json $msg -ErrorAction SilentlyContinue
+            $result = $wsClient.ReceiveAsync(
+                ([ArraySegment[byte]]$buffer),
+                [Threading.CancellationToken]::None
+            ).Result
 
-                if ($data -and $data.tipo -eq "comando") {
-                    switch ($data.comando) {
-                        "bloquear" {
-                            [System.Windows.Forms.MessageBox]::Show("🚫 Tu sesión fue BLOQUEADA por el administrador.", "UNISIMÓN - Control de Sesión", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Stop)
+            if ($result.Count -gt 0) {
+                $jsonString = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+                $data = $null
+                try { $data = $jsonString | ConvertFrom-Json -ErrorAction Stop } catch { }
+
+                if (-not $data) {
+                    Log "⚠️ Mensaje no válido recibido: $jsonString"
+                    continue
+                }
+
+                # 🧠 Verificar tipo de mensaje
+                switch ($data.tipo) {
+                    "control" {
+                        $accion = $data.accion
+                        Log "🎯 Acción recibida desde Dashboard → $accion"
+
+                        switch ($accion) {
+                            "bloquear" {
+                                rundll32.exe user32.dll,LockWorkStation
+                                Log "🟥 Equipo bloqueado"
+                            }
+                            "suspender" {
+                                rundll32.exe powrprof.dll,SetSuspendState 0,1,0
+                                Log "💤 Equipo suspendido"
+                            }
+                           "finalizar" {
+    # enviar confirmación primero (intento sincero de notificar antes de cerrar)
+    $payload = @{
+        tipo    = "log"
+        id      = $idEquipo
+        mensaje = "Acción 'finalizar' recibida — procediendo a cerrar sesión"
+    } | ConvertTo-Json -Compress
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    try {
+        $wsClient.SendAsync([ArraySegment[byte]$bytes,[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+        Start-Sleep -Milliseconds 300   # dar tiempo al envío
+    } catch { }
+    # luego ejecutar el cierre
+    shutdown /l /f
+    Log "⛔ Sesión finalizada por el administrador"
+}
+
+                            "renovar" {
+                                [System.Windows.Forms.MessageBox]::Show("♻️ Sesión renovada correctamente.","Autopréstamos")
+                                Log "🔄 Sesión renovada"
+                            }
+                            default {
+                                Log "❓ Acción desconocida: $accion"
+                            }
                         }
-                        "suspender" {
-                            [System.Windows.Forms.MessageBox]::Show("⏸ Tu sesión fue SUSPENDIDA temporalmente.", "UNISIMÓN - Control de Sesión", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-                        }
-                        "finalizar" {
-                            [System.Windows.Forms.MessageBox]::Show("⚙️ Tu sesión ha sido FINALIZADA por el administrador.", "UNISIMÓN - Control de Sesión", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                            Stop-Process -Id $PID
-                        }
-                        "renovar" {
-                            [System.Windows.Forms.MessageBox]::Show("♻️ Tu sesión fue RENOVADA automáticamente.", "UNISIMÓN - Control de Sesión", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-                        }
-                        default {
-                            Write-Host "⚠️ Comando no reconocido: $($data.comando)"
-                        }
+
+                        # 📨 Enviar confirmación al servidor
+                        $payload = @{
+                            tipo    = "log"
+                            id      = $idEquipo
+                            mensaje = "Acción '$accion' ejecutada correctamente"
+                        } | ConvertTo-Json -Compress
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+                        $wsClient.SendAsync(
+                            [ArraySegment[byte]]$bytes,
+                            [System.Net.WebSockets.WebSocketMessageType]::Text,
+                            $true,
+                            [Threading.CancellationToken]::None
+                        ).Wait()
+                    }
+
+                    "mensaje" {
+                        [System.Windows.Forms.MessageBox]::Show($data.texto, "Mensaje del administrador")
+                        Log "💬 Mensaje recibido del Dashboard: $($data.texto)"
+                    }
+
+                    "info" {
+                        $info = @{
+    usuario = $env:USERNAME
+    equipo  = $env:COMPUTERNAME
+    ip      = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | Select-Object -First 1).IPAddress
+    mac     = (Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | Select-Object -First 1).MacAddress
+}
+$payload = @{ tipo = "info_respuesta"; datos = $info } | ConvertTo-Json -Compress
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+$wsClient.SendAsync([ArraySegment[byte]]$bytes,[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+
+                    }
+
+                    default {
+                        Log "📩 Tipo de mensaje no reconocido: $($data.tipo)"
                     }
                 }
             }
+
         } catch {
-            Write-Host "⚠️ Error en la escucha WebSocket: $($_.Exception.Message)"
+            Log "⚠️ Error en la escucha WebSocket: $($_.Exception.Message)"
+            break
         }
+
         Start-Sleep -Milliseconds 200
     }
 
-    Write-Host "🔴 Conexión WebSocket cerrada."
-} -ArgumentList $wsClient | Out-Null
+    Log "🔴 Conexión WebSocket cerrada."
+}
 
-            function Show-VentanaSesion {
-                    param (
-                    [string]$Titulo = "Gestion de Seccion",
-                    [string]$ClaveAdmin = "S1m0n_2025",
-                    [string]$LogoPath   = "C:\xampp\htdocs\autoprestamos\prueba_equipos\logo.png",
-                    [string]$ApiUrl     = "http://localhost/autoprestamos/prueba_equipos/api.php"
-                )
-            # ============================
+
+# --- CONEXIÓN CON RETRY ---
+function Conectar-WebSocket {
+    param([int]$MaxReintentos = 5)
+    $intentos = 0
+    $global:wsClient = [System.Net.WebSockets.ClientWebSocket]::new()
+
+    while ($intentos -le $MaxReintentos) {
+        if (-not (Test-ServidorActivo)) {
+            Log "⚠️ Servidor WebSocket no disponible. No se intentará reconectar."
+            return $false
+        }
+
+        try {
+            Log "🔌 Intentando conectar a $ServidorWS ..."
+            $global:wsClient.ConnectAsync($uri, [Threading.CancellationToken]::None).Wait()
+
+            if ($global:wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                Log "✅ Conectado al servidor WebSocket como $idEquipo"
+                Registrar-Cliente
+                Start-Job -Name "EscuchaWebSocket" -ScriptBlock { param($ws) Escuchar-WebSocket -wsClient $ws } -ArgumentList $global:wsClient | Out-Null
+                return $true
+            }
+        } catch {
+            Log "❌ Error de conexión: $($_.Exception.Message)"
+        }
+
+        $intentos++
+        if ($intentos -le $MaxReintentos) {
+            Log "⏳ Reintentando conexión ($intentos/$MaxReintentos)..."
+            Start-Sleep -Seconds 3
+        } else {
+            Log "❌ Se alcanzó el límite de reintentos ($MaxReintentos)."
+            return $false
+        }
+    }
+}
+
+# --- PING PERIODICO PARA VERIFICAR ESTADO ---
+Start-Job -Name "PingServidor" -ScriptBlock {
+    while ($true) {
+        try {
+            $ping = Test-Connection -ComputerName "localhost" -Count 1 -Quiet -ErrorAction SilentlyContinue
+            if (-not $ping) {
+                Write-Host "[PING] ⚠️ No hay respuesta del servidor. Verificando reconexión..."
+                if (Test-ServidorActivo) {
+                    Conectar-WebSocket -MaxReintentos 2 | Out-Null
+                }
+            }
+        } catch { }
+        Start-Sleep -Seconds 30
+    }
+} | Out-Null
+
+# --- INICIO ---
+Conectar-WebSocket -MaxReintentos 3
+
             # Crear formulario si no existe
             # ============================
             if (-not $form) {
@@ -128,86 +302,10 @@ Start-Job -Name "EscuchaWebSocket" -ScriptBlock {
                     return "{0:00}:{1:00}:{2:00}" -f $ts.Hours, $ts.Minutes, $ts.Seconds
                 }
 
-                function Log($msg) {
-                    Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] $msg"
-                }
-
                 # ===== Obtener usuario/IP/MAC =====
                 $Username = $env:USERNAME
-# Función para escuchar mensajes WebSocket y ejecutar acciones
-function Escuchar-WebSocket {
-    param ($wsClient)
 
-    $buffer = New-Object Byte[] 4096
 
-    while ($wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-        $result = $wsClient.ReceiveAsync(
-            ([ArraySegment[byte]]$buffer),
-            [Threading.CancellationToken]::None
-        ).Result
-
-        if ($result.Count -gt 0) {
-            $jsonString = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
-            try {
-                        
-                 $data = $mensaje | ConvertFrom-Json
-                 Write-Log "⚙️ Ejecutando acción: $($data.accion) para ID $($data.id)"
-                switch ($data.tipo) {
-                    "accion" {
-                        switch ($data.accion) {
-                            "bloquear" {
-                                Write-Host "🟥 Recibido comando: BLOQUEAR"
-                                rundll32.exe user32.dll,LockWorkStation
-                            }
-                            "suspender" {
-                                Write-Host "💤 Recibido comando: SUSPENDER"
-                                rundll32.exe powrprof.dll,SetSuspendState 0,1,0
-                            }
-                            "finalizar" {
-                                Write-Host "⛔ Recibido comando: FINALIZAR SESIÓN"
-                                shutdown /l /f
-                            }
-                            "renovar" {
-                                Write-Host "🔄 Recibido comando: RENOVAR SESIÓN"
-                                # Lógica interna para renovar tiempo
-                                [System.Windows.Forms.MessageBox]::Show("Sesión renovada correctamente","Autopréstamos")
-                            }
-                            "mensaje" {
-                                Write-Host "💬 Recibido mensaje: $($data.detalles.texto)"
-                                [System.Windows.Forms.MessageBox]::Show($data.detalles.texto,"Mensaje del administrador")
-                            }
-                            "ver_info" {
-                                Write-Host "ℹ️ Solicitud de información del cliente"
-                                $info = @{
-                                    usuario = $env:USERNAME
-                                    equipo = $env:COMPUTERNAME
-                                    ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | Select-Object -First 1).IPAddress
-                                    mac = (Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | Select-Object -First 1).MacAddress
-                                }
-                                $payload = @{
-                                    tipo = "info"
-                                    datos = $info
-                                } | ConvertTo-Json -Compress
-                                $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
-                                $wsClient.SendAsync([ArraySegment[byte]]$bytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait()
-                            }
-                            default {
-                                Write-Host "❓ Acción desconocida: $($data.accion)"
-                            }
-                        }
-                    }
-                    default {
-                        Write-Host "📩 Tipo de mensaje desconocido: $($data.tipo)"
-                    }
-                }
-            }
-            catch {
-                Write-Host "❌ Error interpretando mensaje WebSocket: $_"
-            }
-        }
-    }
-}
-Start-Job -ScriptBlock { param($ws) Escuchar-WebSocket -wsClient $ws } -ArgumentList $wsClient
 
 # ================================
 # Detectar la interfaz con conexión a Internet activa
@@ -365,7 +463,14 @@ try {
                 $labelTimer.Location = [System.Drawing.Point]::new(30,100)
                 $labelTimer.AutoSize = $true
                 $form.Controls.Add($labelTimer)
-
+# =============================================
+            function Show-VentanaSesion {
+                    param (
+                    [string]$Titulo = "Gestion de Seccion",
+                    [string]$ClaveAdmin = "S1m0n_2025",
+                    [string]$ApiUrl     = "http://localhost/autoprestamos/prueba_equipos/api.php"
+                )
+            # ============================
                 
 
                 # ===== Inicio Sesi�n =====

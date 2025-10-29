@@ -1,38 +1,38 @@
 # ============================================================
 # 🎓 SISTEMA DE AUTOPRÉSTAMOS - UNIVERSIDAD SIMÓN BOLÍVAR
 # ============================================================
-# Cliente PowerShell Unificado v2.1
-# Descripción: Gestión completa de sesiones con WebSocket + API REST
+# Descripción: Cliente PowerShell para gestión de sesiones
+#              de equipos con integración WebSocket + API REST
 # Autor: Sistema Autopréstamos Unisimón
-# Versión: 2.1 - Comunicación en Tiempo Real Mejorada
+# Versión: 2.0 (Refactorizado)
+# Fecha: 2025-01-XX
 # ============================================================
 
 <#
 .SYNOPSIS
-    Cliente unificado de autopréstamos con control remoto via WebSocket
+    Cliente de autopréstamos con control remoto via WebSocket
 
 .DESCRIPTION
-    Sistema completo que integra:
-    - Conexión WebSocket bidireccional con servidor
-    - API REST para validación de estados FOLIO  
-    - Interfaz gráfica WinForms
+    Este script gestiona sesiones de préstamo de equipos integrando:
+    - Conexión WebSocket bidireccional con el servidor
+    - Llamadas API REST para validación de estados FOLIO
+    - Interfaz gráfica WinForms para el usuario
     - Control remoto desde dashboard administrativo
-    - Confirmaciones en tiempo real
 
 .NOTES
-    Requiere: Windows PowerShell 5.1+, .NET Framework 4.5+
-    Dependencias: Servidor WebSocket en ws://localhost:8081
+    Requiere Windows PowerShell 5.1 o superior
+    Dependencias: .NET Framework 4.5+
 #>
 
-# 📦 SECCIÓN 1: CONFIGURACIÓN Y VARIABLES GLOBALES
+# ============================================================
+# 📦 SECCIÓN 1: CARGA DE LIBRERÍAS Y CONFIGURACIÓN
 # ============================================================
 
 # Cargar ensamblados para interfaz gráfica
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-
-# Configuración global del sistema
+# Variables globales de configuración
 $Global:Config = @{
     ServidorWS    = "ws://localhost:8081"
     ApiUrl        = "http://localhost/autoprestamos/prueba_equipos/api.php"
@@ -41,23 +41,22 @@ $Global:Config = @{
     Username      = $env:USERNAME
     ClaveAdmin    = "S1m0n_2025"
     MaxReintentos = 5
-    TiempoReintento = 3
-    TiempoSuspension = 30
+    TiempoReintento = 3  # segundos
+    TiempoSuspension = 30  # segundos
 }
 
-# Estado global del sistema
+# Variables globales de estado
 $Global:wsClient = $null
 $Global:SuspendidoProcesado = $false
 $Global:MacAddress = $null
-$Global:conectadoWebSocket = $false
-$Global:mensajesPendientes = [System.Collections.Queue]::new()
 
+# ============================================================
 # 📝 SECCIÓN 2: FUNCIONES DE LOGGING Y UTILIDADES
 # ============================================================
 
 <#
 .SYNOPSIS
-    Registra mensajes con timestamp y colores
+    Registra mensajes con timestamp en consola
 #>
 function Write-Log {
     param(
@@ -99,17 +98,23 @@ function Format-TimeSpan {
 
 <#
 .SYNOPSIS
-    Convierte fecha UTC a hora local de Colombia
+    Convierte fecha UTC de FOLIO a hora local de Colombia
 #>
 function Convert-ToColombiaDate {
     param([string]$UtcString)
     
     try {
-        $dtUtc = [System.Xml.XmlConvert]::ToDateTime($UtcString, [System.Xml.XmlDateTimeSerializationMode]::Utc)
+        $dtUtc = [System.Xml.XmlConvert]::ToDateTime(
+            $UtcString, 
+            [System.Xml.XmlDateTimeSerializationMode]::Utc
+        )
         $tzCol = [System.TimeZoneInfo]::FindSystemTimeZoneById("SA Pacific Standard Time")
         $dtCol = [System.TimeZoneInfo]::ConvertTimeFromUtc($dtUtc, $tzCol)
         
-        return $dtCol.ToString("dddd, dd 'de' MMMM 'de' yyyy", [System.Globalization.CultureInfo]::GetCultureInfo("es-CO"))
+        return $dtCol.ToString(
+            "dddd, dd 'de' MMMM 'de' yyyy",
+            [System.Globalization.CultureInfo]::GetCultureInfo("es-CO")
+        )
     }
     catch {
         Write-Log "Error al convertir fecha: $_" -Tipo Error
@@ -117,19 +122,26 @@ function Convert-ToColombiaDate {
     }
 }
 
+# ============================================================
 # 🌐 SECCIÓN 3: DETECCIÓN DE RED E INTERFAZ
 # ============================================================
 
 <#
 .SYNOPSIS
     Detecta la interfaz de red activa con salida a Internet
+.DESCRIPTION
+    Identifica la interfaz con gateway configurado y estado "Up"
+    Retorna la dirección MAC formateada
 #>
 function Get-ActiveNetworkInterface {
     Write-Log "Detectando interfaz de red activa..." -Tipo Info
     
-    $interfazActiva = Get-NetIPConfiguration | Where-Object { 
-        $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" 
-    } | Select-Object -First 1
+    $interfazActiva = Get-NetIPConfiguration |
+        Where-Object { 
+            $_.IPv4DefaultGateway -ne $null -and 
+            $_.NetAdapter.Status -eq "Up" 
+        } |
+        Select-Object -First 1
     
     if ($interfazActiva) {
         $mac = $interfazActiva.NetAdapter.MacAddress.Replace("-", ":")
@@ -139,7 +151,11 @@ function Get-ActiveNetworkInterface {
         Write-Log "Interfaz detectada: $nombre" -Tipo Success
         Write-Log "MAC: $mac | IP: $ip" -Tipo Info
         
-        return @{ MAC = $mac; Nombre = $nombre; IP = $ip }
+        return @{
+            MAC    = $mac
+            Nombre = $nombre
+            IP     = $ip
+        }
     }
     else {
         Write-Log "No se encontró interfaz con conexión a Internet" -Tipo Error
@@ -147,7 +163,8 @@ function Get-ActiveNetworkInterface {
     }
 }
 
-# 🔌 SECCIÓN 4: GESTIÓN DE WEBSOCKET MEJORADA
+# ============================================================
+# 🔌 SECCIÓN 4: GESTIÓN DE WEBSOCKET
 # ============================================================
 
 <#
@@ -156,7 +173,11 @@ function Get-ActiveNetworkInterface {
 #>
 function Test-ServidorActivo {
     try {
-        $resp = Invoke-WebRequest -Uri "http://localhost/autoprestamos/servers/estado_server.php" -UseBasicParsing -TimeoutSec 3
+        $resp = Invoke-WebRequest `
+            -Uri "http://localhost/autoprestamos/servers/estado_server.php" `
+            -UseBasicParsing `
+            -TimeoutSec 3
+        
         $json = $resp.Content | ConvertFrom-Json
         return ($json.status -eq "corriendo")
     }
@@ -171,13 +192,21 @@ function Test-ServidorActivo {
     Registra el cliente en el servidor WebSocket
 #>
 function Register-ClienteWebSocket {
-    $payload = @{ accion = "UpdateStatus"; id = $Global:Config.IdEquipo } | ConvertTo-Json -Compress
+    $payload = @{
+        accion = "registro_cliente"
+        id     = $Global:Config.IdEquipo
+    } | ConvertTo-Json -Compress
     
     try {
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
         $segment = [System.ArraySegment[byte]]::new($bytes)
         
-        $Global:wsClient.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait()
+        $Global:wsClient.SendAsync(
+            $segment,
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            [Threading.CancellationToken]::None
+        ).Wait()
         
         Write-Log "Cliente registrado → ID: $($Global:Config.IdEquipo)" -Tipo Success
         return $true
@@ -190,13 +219,16 @@ function Register-ClienteWebSocket {
 
 <#
 .SYNOPSIS
-    Envía mensaje JSON al servidor WebSocket
+    Envía un mensaje JSON al servidor WebSocket
 #>
 function Send-WebSocketMessage {
-    param([Parameter(Mandatory=$true)][hashtable]$Payload)
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Payload
+    )
     
-    if (-not $Global:wsClient -or $Global:wsClient.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
-        Write-Log "WebSocket no conectado - Mensaje no enviado" -Tipo Warning
+    if ($Global:wsClient.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
+        Write-Log "WebSocket no está conectado" -Tipo Warning
         return $false
     }
     
@@ -205,9 +237,13 @@ function Send-WebSocketMessage {
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
         $segment = [System.ArraySegment[byte]]::new($bytes)
         
-        $Global:wsClient.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait()
+        $Global:wsClient.SendAsync(
+            $segment,
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            [Threading.CancellationToken]::None
+        ).Wait()
         
-        Write-Log "📤 Mensaje WebSocket enviado: $($Payload.tipo)" -Tipo Info
         return $true
     }
     catch {
@@ -218,131 +254,266 @@ function Send-WebSocketMessage {
 
 <#
 .SYNOPSIS
-    Escucha mensajes WebSocket en segundo plano
+    Procesa acciones de control recibidas desde el dashboard
 #>
-function Start-WebSocketListener {
-    Write-Log "Iniciando escucha WebSocket..." -Tipo Info
+function Invoke-AccionControl {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Accion,
+        [hashtable]$Detalles = @{}
+    )
     
-    $scriptBlock = {
-        param($WebSocket, $IdEquipo)
-        
-        $buffer = New-Object byte[] 4096
-        $encoding = [System.Text.Encoding]::UTF8
-        
-        while ($WebSocket.State -eq 'Open') {
-            try {
-                # Recibir mensaje de forma asíncrona
-                $task = $WebSocket.ReceiveAsync(
-                    [System.ArraySegment[byte]]$buffer,
-                    [System.Threading.CancellationToken]::None
-                )
-                
-                if ($task.Wait(1000)) { # Timeout de 1 segundo
-                    $result = $task.Result
-                    
-                    if ($result.Count -gt 0) {
-                        $message = $encoding.GetString($buffer, 0, $result.Count)
-                        
-                        # Procesar mensaje en el hilo principal usando cola
-                        $Global:mensajesPendientes.Enqueue($message)
-                        Write-Host "📩 Mensaje en cola: $message"
-                    }
-                }
-            }
-            catch {
-                if ($_.Exception.InnerException -is [System.Net.WebSockets.WebSocketException]) {
-                    Write-Host "🔌 WebSocket cerrado"
-                    break
-                }
-            }
-            
-            Start-Sleep -Milliseconds 100
-        }
-    }
-    
-    # Ejecutar en job separado
-    Start-Job -Name "WebSocketListener" -ScriptBlock $scriptBlock -ArgumentList $Global:wsClient, $Global:Config.IdEquipo | Out-Null
-    Write-Log "Escucha WebSocket iniciada en segundo plano" -Tipo Success
-}
+    Write-Log "Ejecutando acción: $Accion" -Tipo Info
 
-<#
-.SYNOPSIS
-    Procesa mensajes pendientes en la cola
-#>
-function Process-PendingMessages {
-    while ($Global:mensajesPendientes.Count -gt 0) {
-        $mensaje = $Global:mensajesPendientes.Dequeue()
-        Invoke-ProcessWebSocketMessage -Message $mensaje
-    }
-}
+    switch ($Accion) {
 
-<#
-.SYNOPSIS
-    Procesa un mensaje WebSocket individual
-#>
-function Invoke-ProcessWebSocketMessage {
-    param([string]$Message)
-    
-    try {
-        Write-Log "📨 Procesando mensaje WebSocket" -Tipo Info
-        $data = $Message | ConvertFrom-Json -ErrorAction Stop
-        
-        switch ($data.tipo) {
-            "control" {
-                Write-Log "🎯 Comando recibido: $($data.accion)" -Tipo Warning
-                Invoke-AccionControl -Accion $data.accion -Detalles $data
-            }
-                "comando" {
-        Write-Log "⚡ Comando recibido en tiempo real: $($data.accion)" -Tipo Warning
-        try {
-            switch ($data.accion.ToLower()) {
-                "suspender" { Invoke-AccionControl -Accion "suspender" -Detalles $data }
-                "bloquear"  { Invoke-AccionControl -Accion "bloquear" -Detalles $data }
-                "renovar"   { Invoke-AccionControl -Accion "renovar" -Detalles $data }
-                "finalizar" { Invoke-AccionControl -Accion "finalizar" -Detalles $data }
-                default     { Write-Log "❓ Acción desconocida recibida: $($data.accion)" -Tipo Warning }
-            }
+        # ============================================================
+        # 🔒 BLOQUEAR EQUIPO
+        # ============================================================
+        "bloquear" {
+            Write-Log "🔒 Bloqueando equipo..." -Tipo Warning
+            rundll32.exe user32.dll,LockWorkStation
 
             Send-WebSocketMessage -Payload @{
                 tipo = "confirmacion"
                 id = $Global:Config.IdEquipo
-                accion = $data.accion
+                accion = "bloquear"
                 resultado = "ejecutado"
-                timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                mensaje = "Equipo bloqueado exitosamente"
+            }
+        }
+
+        # ============================================================
+        # 💤 SUSPENDER EQUIPO
+        # ============================================================
+        "suspender" {
+            Write-Log "💤 Suspendiendo equipo..." -Tipo Warning
+
+            [System.Windows.Forms.MessageBox]::Show(
+                "El equipo se suspenderá en 10 segundos.`n¿Desea guardar su trabajo?",
+                "Suspensión Programada",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+
+            Start-Sleep -Seconds 10
+            rundll32.exe powrprof.dll,SetSuspendState 0,1,0
+
+            Send-WebSocketMessage -Payload @{
+                tipo = "confirmacion"
+                id = $Global:Config.IdEquipo
+                accion = "suspender"
+                resultado = "ejecutado"
+                mensaje = "Equipo suspendido correctamente"
+            }
+        }
+
+        # ============================================================
+        # ⛔ FINALIZAR SESIÓN
+        # ============================================================
+        "finalizar" {
+            Write-Log "⛔ Finalizando sesión..." -Tipo Error
+
+            # Confirmación previa al cierre
+            Send-WebSocketMessage -Payload @{
+                tipo = "confirmacion"
+                id = $Global:Config.IdEquipo
+                accion = "finalizar"
+                resultado = "ejecutado"
+                mensaje = "Cerrando sesión por orden del administrador"
+            }
+
+            [System.Windows.Forms.MessageBox]::Show(
+                "La sesión finalizará en 15 segundos.`nGuarde su trabajo.",
+                "Cierre de Sesión",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+
+            Start-Sleep -Seconds 15
+            shutdown /l /f
+        }
+
+        # ============================================================
+        # ♻️ RENOVAR SESIÓN
+        # ============================================================
+        "renovar" {
+            Write-Log "♻️ Sesión renovada por el administrador" -Tipo Success
+
+            [System.Windows.Forms.MessageBox]::Show(
+                "✅ Su sesión ha sido renovada correctamente.",
+                "Renovación Exitosa",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+
+            Send-WebSocketMessage -Payload @{
+                tipo = "confirmacion"
+                id = $Global:Config.IdEquipo
+                accion = "renovar"
+                resultado = "ejecutado"
+                mensaje = "Sesión renovada confirmada"
+            }
+        }
+
+        # ============================================================
+        # 💬 MENSAJE DEL ADMINISTRADOR
+        # ============================================================
+        "mensaje" {
+            $texto = $Detalles.texto -or "Mensaje del administrador"
+
+            [System.Windows.Forms.MessageBox]::Show(
+                $texto,
+                "Notificación del Sistema",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+
+            Write-Log "💬 Mensaje mostrado al usuario" -Tipo Info
+
+            Send-WebSocketMessage -Payload @{
+                tipo = "confirmacion"
+                id = $Global:Config.IdEquipo
+                accion = "mensaje"
+                resultado = "ejecutado"
+                mensaje = "Mensaje mostrado al usuario"
+            }
+        }
+
+        # ============================================================
+        # 📊 INFORMACIÓN DEL EQUIPO
+        # ============================================================
+        "ver_info" {
+            Write-Log "📊 Recopilando información del equipo..." -Tipo Info
+
+            $info = @{
+                usuario = $env:USERNAME
+                equipo  = $env:COMPUTERNAME
+                ip      = (Get-NetIPAddress -AddressFamily IPv4 | 
+                           Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | 
+                           Select-Object -First 1).IPAddress
+                mac     = $Global:MacAddress
+                so      = (Get-CimInstance Win32_OperatingSystem).Caption
+                memoria = [Math]::Round(
+                    (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 
+                    2
+                )
+                procesador = (Get-CimInstance Win32_Processor).Name
+            }
+
+            Send-WebSocketMessage -Payload @{
+                tipo = "info_respuesta"
+                id = $Global:Config.IdEquipo
+                datos = $info
+            }
+
+            Write-Log "Información enviada al servidor" -Tipo Success
+        }
+
+        # ============================================================
+        # ⚠️ ACCIÓN DESCONOCIDA
+        # ============================================================
+        default {
+            Write-Log "⚠️ Acción desconocida: $Accion" -Tipo Warning
+            Send-WebSocketMessage -Payload @{
+                tipo = "confirmacion"
+                id = $Global:Config.IdEquipo
+                accion = $Accion
+                resultado = "desconocida"
+                mensaje = "Acción no reconocida por el cliente"
+            }
+        }
+    }
+}
+
+
+<#
+.SYNOPSIS
+    Escucha mensajes del servidor WebSocket en bucle continuo
+#>
+function Start-WebSocketListener {
+    param(
+        [Parameter(Mandatory=$true)]
+        $WsClient
+    )
+    
+    Write-Log "Iniciando escucha de mensajes WebSocket..." -Tipo Info
+    $buffer = New-Object Byte[] 4096
+    
+    while ($WsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        try {
+            # Recibir mensaje
+            $result = $WsClient.ReceiveAsync(
+                [ArraySegment[byte]]$buffer,
+                [Threading.CancellationToken]::None
+            ).Result
+            
+            if ($result.Count -gt 0) {
+                # Decodificar JSON
+                $mensaje = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+                
+                Write-Log "📩 Mensaje recibido: $mensaje" -Tipo Info
+                
+                try {
+                    $data = $mensaje | ConvertFrom-Json -ErrorAction Stop
+                }
+                catch {
+                    Write-Log "Mensaje JSON inválido: $mensaje" -Tipo Warning
+                    continue
+                }
+                
+                # Procesar según tipo de mensaje
+                switch ($data.tipo) {
+                    "control" {
+                        Write-Log "🎯 Comando de control recibido: $($data.accion)" -Tipo Info
+                        Invoke-AccionControl -Accion $data.accion -Detalles $data
+                    }
+                    
+                    "mensaje" {
+                        Write-Log "💬 Mensaje del dashboard: $($data.texto)" -Tipo Info
+                        [System.Windows.Forms.MessageBox]::Show(
+                            $data.texto,
+                            "Mensaje del Administrador",
+                            [System.Windows.Forms.MessageBoxButtons]::OK,
+                            [System.Windows.Forms.MessageBoxIcon]::Information
+                        )
+                    }
+                    
+                    "info" {
+                        Write-Log "📊 Solicitud de información recibida" -Tipo Info
+                        Invoke-AccionControl -Accion "ver_info"
+                    }
+                    
+                    "ping" {
+                        # Responder con pong
+                        Send-WebSocketMessage -Payload @{
+                            tipo = "pong"
+                            id = $Global:Config.IdEquipo
+                            timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                        }
+                    }
+                    
+                    default {
+                        Write-Log "Tipo de mensaje no reconocido: $($data.tipo)" -Tipo Warning
+                    }
+                }
             }
         }
         catch {
-            Write-Log "❌ Error ejecutando comando en tiempo real: $_" -Tipo Error
+            Write-Log "Error en la escucha WebSocket: $_" -Tipo Error
+            break
         }
+        
+        # Pequeña pausa para no saturar CPU
+        Start-Sleep -Milliseconds 200
     }
-            "mensaje" {
-                Write-Log "💬 Mensaje del dashboard: $($data.texto)" -Tipo Info
-                Invoke-AccionControl -Accion "mensaje" -Detalles @{texto = $data.texto}
-            }
-            "info" {
-                Write-Log "📊 Solicitud de información" -Tipo Info
-                Invoke-AccionControl -Accion "ver_info"
-            }
-            "ping" {
-                Send-WebSocketMessage -Payload @{
-                    tipo = "pong"
-                    id = $Global:Config.IdEquipo
-                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-                }
-            }
-            default {
-                Write-Log "Tipo de mensaje no manejado: $($data.tipo)" -Tipo Warning
-            }
-        }
-    }
-    catch {
-        Write-Log "Error procesando mensaje WebSocket: $_" -Tipo Error
-    }
+    
+    Write-Log "Conexión WebSocket cerrada" -Tipo Warning
 }
 
 <#
 .SYNOPSIS
-    Establece conexión WebSocket con reintentos
+    Establece conexión WebSocket con reintentos automáticos
 #>
 function Connect-WebSocket {
     param([int]$MaxReintentos = 5)
@@ -351,298 +522,77 @@ function Connect-WebSocket {
     $uri = [System.Uri]$Global:Config.ServidorWS
     
     while ($intentos -le $MaxReintentos) {
+        # Verificar que el servidor esté activo
         if (-not (Test-ServidorActivo)) {
             Write-Log "Servidor WebSocket no disponible" -Tipo Warning
             return $false
         }
         
         try {
-            Write-Log "🔌 Conectando a WebSocket (intento $($intentos + 1)/$MaxReintentos)..." -Tipo Info
+            Write-Log "🔌 Conectando a $($Global:Config.ServidorWS) (intento $($intentos + 1)/$MaxReintentos)..." -Tipo Info
             
+            # Crear nuevo cliente WebSocket
             $Global:wsClient = [System.Net.WebSockets.ClientWebSocket]::new()
+            
+            # Intentar conexión
             $Global:wsClient.ConnectAsync($uri, [Threading.CancellationToken]::None).Wait()
             
+            # Verificar estado
             if ($Global:wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-                Write-Log "Conexión WebSocket establecida" -Tipo Success
+                Write-Log "Conexión establecida exitosamente" -Tipo Success
                 
-                # Registrar cliente y iniciar escucha
+                # Registrar cliente
                 Register-ClienteWebSocket | Out-Null
-                Start-WebSocketListener
-                $Global:conectadoWebSocket = $true
+                
+                # Iniciar escucha en segundo plano
+# Iniciar escucha de mensajes WebSocket en tiempo real
+Start-Job -Name "WebSocketListener" -ScriptBlock {
+    param($ws)
+
+    # Cargar funciones necesarias dentro del Job
+    Import-Module "$PSScriptRoot\$($MyInvocation.MyCommand.Name)" -Force
+
+    try {
+        Start-WebSocketListener -WsClient $ws
+    }
+    catch {
+        Write-Host "[WS JOB] Error en escucha: $_" -ForegroundColor Red
+    }
+} -ArgumentList $Global:wsClient | Out-Null
+
                 
                 return $true
             }
         }
         catch {
-            Write-Log "Error de conexión WebSocket: $_" -Tipo Error
+            Write-Log "Error de conexión: $_" -Tipo Error
         }
         
         $intentos++
         if ($intentos -le $MaxReintentos) {
-            Write-Log "Reintentando en $($Global:Config.TiempoReintento) segundos..." -Tipo Warning
+            Write-Log "⏳ Reintentando en $($Global:Config.TiempoReintento) segundos..." -Tipo Warning
             Start-Sleep -Seconds $Global:Config.TiempoReintento
         }
     }
     
-    Write-Log "Límite de reintentos WebSocket alcanzado" -Tipo Error
+    Write-Log "Límite de reintentos alcanzado ($MaxReintentos)" -Tipo Error
     return $false
 }
 
-# 🎯 SECCIÓN 5: PROCESAMIENTO DE COMANDOS Y ACCIONES
+# ============================================================
+# 🌐 SECCIÓN 5: LLAMADAS A API REST
 # ============================================================
 
 <#
 .SYNOPSIS
-    Ejecuta acciones de control con confirmaciones
-#>
-function Invoke-AccionControl {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Accion,
-        
-        [hashtable]$Detalles = @{}
-    )
-    
-    Write-Log "🎯 Ejecutando acción: $Accion" -Tipo Info
-    
-    # Confirmar inicio de acción
-    Send-WebSocketMessage -Payload @{
-        tipo = "log"
-        id = $Global:Config.IdEquipo
-        mensaje = "Iniciando acción: $Accion"
-        timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    }
-    
-    $resultado = $true
-    
-    switch ($Accion.ToLower()) {
-        "bloquear" {
-            Write-Log "🔒 Bloqueando equipo..." -Tipo Warning
-            
-            [System.Windows.Forms.MessageBox]::Show(
-                "El equipo se bloqueará en 5 segundos por orden del administrador.",
-                "Bloqueo de Equipo",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            
-            # Countdown
-            for ($i = 5; $i -gt 0; $i--) {
-                Send-WebSocketMessage -Payload @{
-                    tipo = "log"
-                    id = $Global:Config.IdEquipo
-                    mensaje = "Bloqueando en $i segundos..."
-                }
-                Start-Sleep -Seconds 1
-            }
-            
-            # Bloquear equipo
-            rundll32.exe user32.dll,LockWorkStation
-            
-            Send-WebSocketMessage -Payload @{
-                tipo = "log"
-                id = $Global:Config.IdEquipo
-                mensaje = "Equipo bloqueado exitosamente"
-            }
-        }
-        
-        "suspender" {
-            Write-Log "💤 Suspendiendo equipo..." -Tipo Warning
-            
-            $result = [System.Windows.Forms.MessageBox]::Show(
-                "El equipo se suspenderá en 10 segundos.`n¿Desea guardar su trabajo?",
-                "Suspensión Programada",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            
-            if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-                Send-WebSocketMessage -Payload @{
-                    tipo = "log"
-                    id = $Global:Config.IdEquipo
-                    mensaje = "Usuario confirmó guardar trabajo antes de suspender"
-                }
-            }
-            
-            # Countdown
-            for ($i = 10; $i -gt 0; $i--) {
-                Send-WebSocketMessage -Payload @{
-                    tipo = "log"
-                    id = $Global:Config.IdEquipo
-                    mensaje = "Suspendiendo en $i segundos..."
-                }
-                Start-Sleep -Seconds 1
-            }
-            
-            # Suspender equipo
-            Add-Type -AssemblyName System.Windows.Forms
-            [System.Windows.Forms.Application]::SetSuspendState("Suspend", $false, $false)
-            
-            Send-WebSocketMessage -Payload @{
-                tipo = "log"
-                id = $Global:Config.IdEquipo
-                mensaje = "Equipo suspendido"
-            }
-        }
-        
-        "finalizar" {
-            Write-Log "⛔ Finalizando sesión..." -Tipo Error
-            
-            $result = [System.Windows.Forms.MessageBox]::Show(
-                "La sesión finalizará en 15 segundos por orden del administrador.`nGuarde todo su trabajo inmediatamente.",
-                "Cierre de Sesión Forzado",
-                [System.Windows.Forms.MessageBoxButtons]::OKCancel,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-            
-            if ($result -eq [System.Windows.Forms.DialogResult]::Cancel) {
-                Write-Log "Usuario canceló cierre de sesión" -Tipo Warning
-                Send-WebSocketMessage -Payload @{
-                    tipo = "log"
-                    id = $Global:Config.IdEquipo
-                    mensaje = "Usuario canceló el cierre de sesión"
-                }
-                $resultado = $false
-                break
-            }
-            
-            # Countdown con notificaciones
-            for ($i = 15; $i -gt 0; $i--) {
-                if ($i -le 5) {
-                    [System.Windows.Forms.MessageBox]::Show(
-                        "La sesión finalizará en $i segundos!",
-                        "Cierre Inminente",
-                        [System.Windows.Forms.MessageBoxButtons]::OK,
-                        [System.Windows.Forms.MessageBoxIcon]::Warning
-                    )
-                }
-                
-                Send-WebSocketMessage -Payload @{
-                    tipo = "log"
-                    id = $Global:Config.IdEquipo
-                    mensaje = "Cerrando sesión en $i segundos"
-                }
-                Start-Sleep -Seconds 1
-            }
-            
-            # Cerrar sesión
-            shutdown /l /f
-            
-            Send-WebSocketMessage -Payload @{
-                tipo = "log"
-                id = $Global:Config.IdEquipo
-                mensaje = "Sesión finalizada"
-            }
-        }
-        
-        "renovar" {
-            Write-Log "♻️ Sesión renovada por administrador" -Tipo Success
-            
-            [System.Windows.Forms.MessageBox]::Show(
-                "✅ Su sesión ha sido renovada por el administrador.`nPuede continuar trabajando.",
-                "Sesión Renovada",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-            
-            Send-WebSocketMessage -Payload @{
-                tipo = "log"
-                id = $Global:Config.IdEquipo
-                mensaje = "Sesión renovada confirmada por usuario"
-            }
-        }
-        
-        "mensaje" {
-            $texto = $Detalles.texto -or $Detalles.mensaje -or "Mensaje del administrador"
-            
-            [System.Windows.Forms.MessageBox]::Show(
-                $texto,
-                "📩 Mensaje del Administrador",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-            
-            Write-Log "💬 Mensaje mostrado al usuario: $texto" -Tipo Info
-            
-            Send-WebSocketMessage -Payload @{
-                tipo = "log"
-                id = $Global:Config.IdEquipo
-                mensaje = "Mensaje mostrado: $texto"
-            }
-        }
-        
-        "ver_info" {
-            Write-Log "📊 Recopilando información del equipo..." -Tipo Info
-            
-            try {
-                $info = @{
-                    usuario = $env:USERNAME
-                    equipo = $env:COMPUTERNAME
-                    ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias (Get-NetAdapter | Where-Object Status -eq 'Up').InterfaceAlias | Select-Object -First 1).IPAddress
-                    mac = $Global:MacAddress
-                    so = (Get-CimInstance Win32_OperatingSystem).Caption
-                    memoria = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
-                    procesador = (Get-CimInstance Win32_Processor).Name
-                    dominio = $env:USERDOMAIN
-                    arquitectura = $env:PROCESSOR_ARCHITECTURE
-                    sesion_activa = (Get-Process -Name explorer -ErrorAction SilentlyContinue).Count -gt 0
-                    hora_sistema = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                }
-                
-                Send-WebSocketMessage -Payload @{
-                    tipo = "info_respuesta"
-                    id = $Global:Config.IdEquipo
-                    datos = $info
-                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-                }
-                
-                Write-Log "Información del equipo enviada al servidor" -Tipo Success
-            }
-            catch {
-                Write-Log "Error al recopilar información: $_" -Tipo Error
-                Send-WebSocketMessage -Payload @{
-                    tipo = "error"
-                    id = $Global:Config.IdEquipo
-                    mensaje = "Error al recopilar información: $($_.Exception.Message)"
-                }
-            }
-        }
-        
-        default {
-            Write-Log "Acción desconocida: $Accion" -Tipo Warning
-            Send-WebSocketMessage -Payload @{
-                tipo = "error"
-                id = $Global:Config.IdEquipo
-                mensaje = "Acción desconocida: $Accion"
-            }
-            $resultado = $false
-        }
-    }
-    
-    # Confirmar finalización
-    if ($resultado) {
-        Send-WebSocketMessage -Payload @{
-            tipo = "comando_completado"
-            id = $Global:Config.IdEquipo
-            accion = $Accion
-            estado = "completado"
-            timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-        }
-    }
-    
-    return $resultado
-}
-
-# 🌐 SECCIÓN 6: LLAMADAS A API REST
-# ============================================================
-
-<#
-.SYNOPSIS
-    Realiza llamadas HTTP POST a la API
+    Realiza llamadas HTTP POST a la API de autopréstamos
 #>
 function Invoke-ApiCall {
-    param([hashtable]$ExtraBody = @{})
+    param(
+        [hashtable]$ExtraBody = @{}
+    )
     
+    # Construir body base
     $body = @{
         username = $Global:Config.Username
         mac_address = $Global:MacAddress
@@ -654,7 +604,12 @@ function Invoke-ApiCall {
     try {
         Write-Log "🌐 Llamando API: $($Global:Config.ApiUrl)" -Tipo Info
         
-        $response = Invoke-RestMethod -Uri $Global:Config.ApiUrl -Method Post -Headers $headers -Body $json -TimeoutSec 60
+        $response = Invoke-RestMethod `
+            -Uri $Global:Config.ApiUrl `
+            -Method Post `
+            -Headers $headers `
+            -Body $json `
+            -TimeoutSec 60
         
         Write-Log "Respuesta API recibida: $($response.estado)" -Tipo Success
         return $response
@@ -671,15 +626,18 @@ function Invoke-ApiCall {
     }
 }
 
-# 🖥️ SECCIÓN 7: INTERFAZ GRÁFICA (WINFORMS)
+# ============================================================
+# 🖥️ SECCIÓN 6: INTERFAZ GRÁFICA (WINFORMS)
 # ============================================================
 
 <#
 .SYNOPSIS
-    Crea y configura el formulario principal
+    Crea y configura el formulario principal de la sesión
 #>
 function New-SessionForm {
-    param([string]$Titulo = "Gestión de Sesión - Autopréstamos")
+    param(
+        [string]$Titulo = "Gestión de Sesión - Autopréstamos"
+    )
     
     # Crear formulario
     $form = New-Object System.Windows.Forms.Form
@@ -699,12 +657,7 @@ function New-SessionForm {
     )
     
     # Prevenir cierre por usuario
-    $form.Add_FormClosing({
-        if ($_.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing) {
-            $_.Cancel = $true
-            Write-Log "Intento de cierre bloqueado por usuario" -Tipo Warning
-        }
-    })
+
     
     # ===== LOGO =====
     $logo = New-Object System.Windows.Forms.PictureBox
@@ -769,6 +722,7 @@ function New-SessionForm {
     
     $form.Controls.Add($btnReducir)
     
+    # Retornar formulario y controles
     return @{
         Form = $form
         LabelInfo = $labelInfo
@@ -783,7 +737,10 @@ function New-SessionForm {
     Crea modal de desbloqueo para sesiones suspendidas
 #>
 function Show-SuspensionModal {
-    param([Parameter(Mandatory=$true)][string]$ClaveCorrecta)
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ClaveCorrecta
+    )
     
     Write-Log "Mostrando modal de suspensión..." -Tipo Warning
     
@@ -887,13 +844,16 @@ function Show-SuspensionModal {
     $timer.Start()
     
     # Mostrar modal
-    $modal.ShowDialog() | Out-Null
+    $modal.
+
+ShowDialog() | Out-Null
     
     # Detener timer si sigue activo
     if ($timer.Enabled) {
         $timer.Stop()
     }
     
+    # Retornar resultado
     return @{
         Desbloqueado = $script:desbloqueado
         Cancelado = $script:cancelado
@@ -902,7 +862,8 @@ function Show-SuspensionModal {
     }
 }
 
-# 🎮 SECCIÓN 8: LÓGICA DE ESTADOS DE SESIÓN
+# ============================================================
+# 🎮 SECCIÓN 7: LÓGICA PRINCIPAL DE SESIÓN
 # ============================================================
 
 <#
@@ -911,8 +872,11 @@ function Show-SuspensionModal {
 #>
 function Invoke-EstadoAbierto {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     Write-Log "Estado: ABIERTO - Sesión activa" -Tipo Success
@@ -925,13 +889,14 @@ function Invoke-EstadoAbierto {
     $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::DarkGreen
     
     # Obtener tiempo restante
-    $tiempo = if ($Response.tiempo_restante) { $Response.tiempo_restante } else { 30 }
+    $tiempo = if ($Response.tiempo_restante) { 
+        $Response.tiempo_restante 
+    } else { 
+        30 
+    }
     
     # Countdown
     for ($i = $tiempo; $i -ge 0; $i--) {
-        # Procesar mensajes WebSocket pendientes
-        Process-PendingMessages
-        
         $Controles.LabelTimer.Text = "🟢 SESIÓN ACTIVA - Restante: $(Format-TimeSpan $i)"
         $Controles.Form.Refresh()
         
@@ -939,7 +904,6 @@ function Invoke-EstadoAbierto {
         $waitUntil = (Get-Date).AddSeconds(1)
         while ((Get-Date) -lt $waitUntil) {
             [System.Windows.Forms.Application]::DoEvents()
-            Process-PendingMessages
             Start-Sleep -Milliseconds 50
         }
     }
@@ -954,8 +918,11 @@ function Invoke-EstadoAbierto {
 #>
 function Invoke-EstadoSuspendido {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     if ($Global:SuspendidoProcesado) {
@@ -969,7 +936,7 @@ function Invoke-EstadoSuspendido {
     # Mostrar modal de desbloqueo
     $resultado = Show-SuspensionModal -ClaveCorrecta $Global:Config.ClaveAdmin
     
-    # Procesar resultado
+    # Procesar resultado del modal
     if ($resultado.Desbloqueado) {
         Write-Log "Sesión desbloqueada con clave correcta" -Tipo Success
         return Invoke-ApiCall -ExtraBody @{ clave_admin = $Global:Config.ClaveAdmin }
@@ -996,8 +963,11 @@ function Invoke-EstadoSuspendido {
 #>
 function Invoke-EstadoBloqueado {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     Write-Log "Estado: BLOQUEADO - Penalización activa" -Tipo Error
@@ -1005,16 +975,20 @@ function Invoke-EstadoBloqueado {
     # Actualizar interfaz
     $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Red
     
-    # Verificar check-in de FOLIO
-    if ($Response.folioCheckin -and $Response.folioCheckin.raw -and $Response.folioCheckin.raw.loan.status.name -eq "Closed") {
+    # Verificar si el check-in fue exitoso
+    if ($Response.folioCheckin -and 
+        $Response.folioCheckin.raw -and 
+        $Response.folioCheckin.raw.loan.status.name -eq "Closed") {
+        
         Write-Log "Check-in de FOLIO detectado, consultando nuevo estado..." -Tipo Info
+        
+        # Consultar estado actualizado
         $newResponse = Invoke-ApiCall
         
         # Espera breve
         $waitUntil = (Get-Date).AddSeconds(1)
         while ((Get-Date) -lt $waitUntil) {
             [System.Windows.Forms.Application]::DoEvents()
-            Process-PendingMessages
             Start-Sleep -Milliseconds 50
         }
         
@@ -1022,12 +996,14 @@ function Invoke-EstadoBloqueado {
     }
     
     # Obtener tiempo de bloqueo
-    $tiempo = if ($Response.tiempo_restante) { $Response.tiempo_restante } else { 10 }
+    $tiempo = if ($Response.tiempo_restante) { 
+        $Response.tiempo_restante 
+    } else { 
+        10 
+    }
     
     # Countdown de penalización
     for ($i = $tiempo; $i -ge 0; $i--) {
-        Process-PendingMessages
-        
         $Controles.LabelTimer.Text = "🔒 BLOQUEADO - Restante: $(Format-TimeSpan $i)"
         $Controles.Form.Refresh()
         
@@ -1035,7 +1011,6 @@ function Invoke-EstadoBloqueado {
         $waitUntil = (Get-Date).AddSeconds(1)
         while ((Get-Date) -lt $waitUntil) {
             [System.Windows.Forms.Application]::DoEvents()
-            Process-PendingMessages
             Start-Sleep -Milliseconds 50
         }
     }
@@ -1050,8 +1025,11 @@ function Invoke-EstadoBloqueado {
 #>
 function Invoke-EstadoRenovado {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     Write-Log "Estado: RENOVADO - Esperando confirmación..." -Tipo Info
@@ -1063,14 +1041,12 @@ function Invoke-EstadoRenovado {
     
     # Esperar hasta que el estado cambie
     do {
-        Process-PendingMessages
         $newResponse = Invoke-ApiCall
         
         # Espera amigable con UI
         $waitUntil = (Get-Date).AddSeconds(1)
         while ((Get-Date) -lt $waitUntil) {
             [System.Windows.Forms.Application]::DoEvents()
-            Process-PendingMessages
             Start-Sleep -Milliseconds 50
         }
         
@@ -1085,12 +1061,16 @@ function Invoke-EstadoRenovado {
 #>
 function Invoke-EstadoError {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     Write-Log "Estado: ERROR - $($Response.mensaje)" -Tipo Error
     
+    # Mostrar mensaje de error
     [System.Windows.Forms.MessageBox]::Show(
         $Response.mensaje,
         "❌ Error de Sesión",
@@ -1098,6 +1078,7 @@ function Invoke-EstadoError {
         [System.Windows.Forms.MessageBoxIcon]::Error
     )
     
+    # Cerrar formulario
     $Controles.Form.Close()
 }
 
@@ -1107,8 +1088,11 @@ function Invoke-EstadoError {
 #>
 function Invoke-EstadoRestringido {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     Write-Log "Estado: RESTRINGIDO - Usuario con bloqueos en FOLIO" -Tipo Error
@@ -1169,18 +1153,17 @@ function Invoke-EstadoRestringido {
     # Timer de autocierre (6 segundos)
     $segundos = 6
     for ($i = $segundos; $i -ge 1; $i--) {
-        Process-PendingMessages
         $Controles.BtnReducir.Text = "Cerrar ($i)"
         $Controles.Form.Refresh()
         
         $waitUntil = (Get-Date).AddSeconds(1)
         while ((Get-Date) -lt $waitUntil) {
             [System.Windows.Forms.Application]::DoEvents()
-            Process-PendingMessages
             Start-Sleep -Milliseconds 50
         }
     }
     
+    # Cerrar formulario
     $Controles.Form.Close()
 }
 
@@ -1190,8 +1173,11 @@ function Invoke-EstadoRestringido {
 #>
 function Invoke-EstadoFinalizado {
     param(
-        [Parameter(Mandatory=$true)]$Controles,
-        [Parameter(Mandatory=$true)]$Response
+        [Parameter(Mandatory=$true)]
+        $Controles,
+        
+        [Parameter(Mandatory=$true)]
+        $Response
     )
     
     Write-Log "Estado: FINALIZADO - Sesión completada" -Tipo Success
@@ -1205,11 +1191,9 @@ function Invoke-EstadoFinalizado {
     # Esperar 2 segundos antes de cerrar
     Start-Sleep -Seconds 2
     
+    # Cerrar formulario
     $Controles.Form.Close()
 }
-
-# 🚀 SECCIÓN 9: BUCLE PRINCIPAL Y EJECUCIÓN
-# ============================================================
 
 <#
 .SYNOPSIS
@@ -1233,7 +1217,10 @@ function Start-SessionLoop {
     $controles.Form.Show()
     
     # Bucle de estados
-    while ($response -and $response.estado -ne "Finalizado" -and $response.estado -ne "Restringido") {
+    while ($response -and 
+           $response.estado -ne "Finalizado" -and 
+           $response.estado -ne "Restringido") {
+        
         Write-Log "Estado actual: $($response.estado)" -Tipo Info
         
         # Reset flag de suspensión si el estado cambió
@@ -1241,30 +1228,33 @@ function Start-SessionLoop {
             $Global:SuspendidoProcesado = $false
         }
         
-        # Procesar mensajes WebSocket pendientes
-        Process-PendingMessages
-        
         # Máquina de estados
         switch ($response.estado) {
             "Abierto" {
                 $response = Invoke-EstadoAbierto -Controles $controles -Response $response
             }
+            
             "Suspendido" {
                 $response = Invoke-EstadoSuspendido -Controles $controles -Response $response
             }
+            
             "Bloqueado" {
                 $response = Invoke-EstadoBloqueado -Controles $controles -Response $response
             }
+            
             "Renovado" {
                 $response = Invoke-EstadoRenovado -Controles $controles -Response $response
             }
+            
             "Error" {
                 Invoke-EstadoError -Controles $controles -Response $response
                 return
             }
+            
             default {
                 # Verificar si FOLIO cerró el préstamo
-                if ($response.folioResp -and $response.folioResp.raw.loan.status.name -eq "Closed") {
+                if ($response.folioResp -and 
+                    $response.folioResp.raw.loan.status.name -eq "Closed") {
                     Write-Log "Préstamo cerrado en FOLIO" -Tipo Info
                     $controles.Form.Close()
                     return
@@ -1276,10 +1266,7 @@ function Start-SessionLoop {
             }
         }
         
-        # Procesar mensajes pendientes
-        Process-PendingMessages
-        
-        # Pequeña pausa
+        # Pequeña pausa para evitar saturación
         Start-Sleep -Milliseconds 100
     }
     
@@ -1293,6 +1280,10 @@ function Start-SessionLoop {
     
     Write-Log "Bucle de sesión finalizado" -Tipo Success
 }
+
+# ============================================================
+# 🚀 SECCIÓN 8: INICIALIZACIÓN Y EJECUCIÓN PRINCIPAL
+# ============================================================
 
 <#
 .SYNOPSIS
@@ -1340,16 +1331,19 @@ function Clear-Resources {
     Write-Log "Limpiando recursos..." -Tipo Info
     
     # Cerrar WebSocket si está abierto
-    if ($Global:wsClient -and $Global:wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+    if ($Global:wsClient -and 
+        $Global:wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        
         try {
             Write-Log "Cerrando conexión WebSocket..." -Tipo Info
             
-            $Global:wsClient.CloseAsync(
-                [System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure,
-                "Fin de sesión",
-                [System.Threading.CancellationToken]::None
-            ).Wait(3000)
+            $Global:wsClient.CloseOutputAsync(
+                'NormalClosure',
+                'Fin de sesión',
+                [Threading.CancellationToken]::None
+            ).GetAwaiter().GetResult()
             
+            Start-Sleep -Milliseconds 300
             Write-Log "WebSocket cerrado correctamente" -Tipo Success
         }
         catch {
@@ -1357,12 +1351,18 @@ function Clear-Resources {
         }
     }
     
-    # Detener todos los jobs
-    Get-Job | Stop-Job -PassThru | Remove-Job -Force
+    # Detener jobs en segundo plano
+    $jobs = Get-Job -Name "WebSocketListener", "PingServidor" -ErrorAction SilentlyContinue
+    if ($jobs) {
+        Write-Log "Deteniendo jobs en segundo plano..." -Tipo Info
+        $jobs | Stop-Job
+        $jobs | Remove-Job -Force
+    }
     
     Write-Log "Recursos liberados" -Tipo Success
 }
 
+# ============================================================
 # 🎬 PUNTO DE ENTRADA PRINCIPAL
 # ============================================================
 
@@ -1373,7 +1373,7 @@ try {
     Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "║                                                            ║" -ForegroundColor Cyan
     Write-Host "║        SISTEMA DE AUTOPRÉSTAMOS - UNISIMÓN                ║" -ForegroundColor Cyan
-    Write-Host "║        Cliente PowerShell v2.1 - Comunicación Mejorada    ║" -ForegroundColor Cyan
+    Write-Host "║        Cliente PowerShell v2.0                            ║" -ForegroundColor Cyan
     Write-Host "║                                                            ║" -ForegroundColor Cyan
     Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
@@ -1386,25 +1386,30 @@ try {
         exit 1
     }
     
-    # Iniciar job de monitoreo
+    # Iniciar job de monitoreo (ping periódico)
     Start-Job -Name "PingServidor" -ScriptBlock {
+        param($Config)
+        
         while ($true) {
             try {
                 $ping = Test-Connection -ComputerName "localhost" -Count 1 -Quiet -ErrorAction SilentlyContinue
+                
                 if (-not $ping) {
                     Write-Host "[PING] ⚠️ Sin respuesta del servidor" -ForegroundColor Yellow
                 }
             }
-            catch { }
+            catch {
+                # Silenciar errores de ping
+            }
+            
             Start-Sleep -Seconds 30
         }
-    } | Out-Null
+    } -ArgumentList $Global:Config | Out-Null
     
     # Ejecutar bucle principal de sesión
     Start-SessionLoop
     
     Write-Log "Ejecución completada exitosamente" -Tipo Success
-    Clear-Resources
 }
 catch {
     Write-Log "Error crítico: $($_.Exception.Message)" -Tipo Error

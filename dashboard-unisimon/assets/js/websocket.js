@@ -1,103 +1,104 @@
-// websocket.js (versión corregida)
+// websocket.js (reemplazar)
+
+/* global conectarWS, ws, mostrarToast, actualizarTabla, actualizarStats, agregarLog, verificarServidor */
 let ws = null;
+let reintentos = 0;
+const MAX_REINTENTOS = 5;
+const INTERVALO_REINTENTO = 3000;
 
-function conectarWS() {
-  const btn = document.querySelector("#toggleBtn");
-  const dot = document.querySelector("#statusDot");
-
-  // evita múltiples instancias
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    mostrarToast("🟢 Ya conectado");
-    return;
-  }
-
-  ws = new WebSocket("ws://localhost:8081");
-
-  ws.onopen = () => {
-    conectado = true;
-    btn.textContent = "Desconectar";
-    btn.classList.remove("btn-outline-danger","btn-warning");
-    btn.classList.add("btn-success");
-    dot.style.background = "green";
-    localStorage.setItem("seccion", "true");
-    mostrarToast("🟢 Conectado al servidor WebSocket");
-    setTimeout(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ accion: "getEstado" }));
-      }
-    }, 300);
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      switch (data.tipo) {
-        case "estado":
-          if (data.sesiones) actualizarTabla(data.sesiones);
-          if (data.stats) actualizarStats(data.stats);
-          break;
-        case "mensaje":
-          mostrarToast("💬 " + (data.texto || data.mensaje), "info");
-          agregarLog("💬 " + (data.texto || data.mensaje), "info");
-          break;
-        case "log":
-        case "info":
-          mostrarToast(data.mensaje ?? "Evento recibido", "success");
-          agregarLog(data.mensaje ?? "Evento recibido", "success");
-          break;
-        case "comando":
-          mostrarToast("⚙️ Comando ejecutado: " + data.comando, "warning");
-          agregarLog("⚙️ Comando ejecutado: " + data.comando, "warning");
-          break;
-        case "error":
-          mostrarToast("❌ " + (data.mensaje ?? "Error desconocido"), "danger");
-          agregarLog("❌ " + (data.mensaje ?? "Error desconocido"), "danger");
-          break;
-        default:
-          console.log("📡 Mensaje desconocido:", data);
-          agregarLog("📡 Mensaje desconocido: " + JSON.stringify(data), "secondary");
-      }
-    } catch (err) {
-      console.error("❌ Error parseando mensaje WS:", err, event.data);
-      mostrarToast("❌ Error al interpretar mensaje del servidor.", "danger");
-      agregarLog("Error WS: " + err.message, "danger");
-    }
-  };
-
-  ws.onerror = (err) => {
-    console.error("⚠️ Error WebSocket:", err);
-    btn.textContent = "Error";
-    btn.classList.remove("btn-success");
-    btn.classList.add("btn-warning");
-    mostrarToast("❌ No se pudo conectar al servidor WebSocket");
-  };
-
-  ws.onclose = () => {
-    conectado = false;
-    btn.textContent = "Conectar";
-    btn.classList.remove("btn-success", "btn-warning");
-    btn.classList.add("btn-outline-danger");
-    localStorage.setItem("seccion", "false");
-    mostrarToast("🔴 Desconectado del WebSocket");
-    mostrarDesconectado();
-    actualizarStats({ Abierto: 0, Suspendido: 0, Bloqueado: 0, Finalizado: 0 });
+window.conectarWS = async function() {
+    const btn = document.querySelector("#toggleBtn");
     const dot = document.querySelector("#statusDot");
-    if (dot) dot.style.background = "#d00";
-  };
-}
 
-function desconectar() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.close();
-    mostrarToast("🛑 Desconectando del WebSocket...");
-  } else {
-    mostrarToast("⚠️ No hay conexión activa para cerrar");
-  }
-}
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        mostrarToast("🟢 Ya conectado al servidor WebSocket");
+        return;
+    }
 
-// keepalive / pedir estado cada 5s solo si está conectado
+    const servidorActivo = await verificarServidor();
+    if (!servidorActivo) {
+        mostrarToast("⚠️ Servidor WebSocket apagado");
+        return;
+    }
+
+    try {
+        ws = new WebSocket("ws://localhost:8081");
+
+        ws.onopen = () => {
+            reintentos = 0;
+            btn.textContent = "Desconectar";
+            btn.classList.remove("btn-outline-danger", "btn-warning");
+            btn.classList.add("btn-success");
+            if (dot) dot.style.background = "green";
+            mostrarToast("🟢 Conectado al servidor WebSocket");
+
+            // registrar dashboard y pedir estado
+            ws.send(JSON.stringify({ tipo: "registro_dashboard", id: "Administrador_" + Date.now() }));
+            setTimeout(()=> ws.send(JSON.stringify({ accion: "getEstado" })), 1500);
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                switch (data.tipo) {
+                    case "estado":
+                        actualizarTabla(data.sesiones || []);
+                        if (data.stats) actualizarStats(data.stats);
+                        break;
+                    case "mensaje":
+                        mostrarToast("💬 " + (data.texto || data.mensaje), "info");
+                        agregarLog("💬 " + (data.texto || data.mensaje), "info");
+                        break;
+                    case "log":
+                        agregarLog(data.mensaje, "success");
+                        break;
+                    case "comando":
+                        mostrarToast(`⚙️ Comando '${data.accion}' ejecutado en ${data.nombre_pc}`, "info");
+                        agregarLog(`⚙️ Comando '${data.accion}' ejecutado en ${data.nombre_pc}`, "info");
+                        break;
+                    case "confirmacion":
+                        mostrarToast(`✅ ${data.id}: ${data.accion} => ${data.resultado}`, "success");
+                        agregarLog(`Confirmación: ${data.id} ${data.accion} ${data.resultado}`, "success");
+                        // refrescar estado si es necesario
+                        setTimeout(()=> ws.send(JSON.stringify({ accion: "getEstado" })), 800);
+                        break;
+                    case "error":
+                        mostrarToast("❌ " + data.mensaje, "danger");
+                        agregarLog("❌ " + data.mensaje, "error");
+                        break;
+                    default:
+                        console.log("📡 Mensaje no manejado:", data);
+                }
+            } catch (err) {
+                console.error("❌ Error parseando mensaje:", err, event.data);
+            }
+        };
+
+        ws.onerror = (err) => {
+            console.error("⚠️ Error WebSocket:", err);
+            mostrarToast("❌ Error de conexión WebSocket", "danger");
+        };
+
+        ws.onclose = async () => {
+            mostrarToast("🔴 Conexión WebSocket cerrada", "warning");
+            if (reintentos < MAX_REINTENTOS) {
+                reintentos++;
+                mostrarToast(`🔄 Reconectando... (${reintentos}/${MAX_REINTENTOS})`, "warning");
+                setTimeout(window.conectarWS, INTERVALO_REINTENTO);
+            } else {
+                mostrarToast("❌ No se pudo reconectar al servidor", "danger");
+            }
+        };
+
+    } catch (error) {
+        console.error("❌ Error al conectar WebSocket:", error);
+        mostrarToast("❌ Error de conexión WebSocket", "danger");
+    }
+};
+
+// Heartbeat: pedir estado cada 15s
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ accion: "getEstado" }));
-  }
-}, 5000);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ accion: "getEstado" }));
+    }
+}, 15000);

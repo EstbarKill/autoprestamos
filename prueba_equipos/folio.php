@@ -91,11 +91,8 @@ function folioManualBlock($userId, $token) {
     return $vigentes;
 }
 
-
-
-
 function folioAutoBlock($userId, $token) {
-    $url = "https://okapi-unisimonbolivar.folio.ebsco.com/automated-patron-blocks?query=userId==" . urlencode($userId);
+    $url = "https://okapi-unisimonbolivar.folio.ebsco.com/automated-patron-blocks/" . urlencode($userId);
     $data = callFolio($url, $token);
     if (isset($data['__error'])) return [];
     $blocks = $data['automatedPatronBlocks'] ?? $data['automatedpatronblocks'] ?? $data['autoBlocks'] ?? [];

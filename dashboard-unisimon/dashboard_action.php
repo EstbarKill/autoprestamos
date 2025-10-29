@@ -1,5 +1,5 @@
 <?php
-// dashboard_action.php
+// dashboard_action.php - VERSIÓN MEJORADA
 include 'db.php';
 header('Content-Type: application/json');
 
@@ -11,72 +11,102 @@ if (!$input || !isset($input['accion'])) {
 
 $accion = $input['accion'];
 $id = isset($input['id']) ? (int)$input['id'] : null;
+$nombre_pc = isset($input['nombre_pc']) ? $input['nombre_pc'] : null;
+
+// Registrar log de la acción
+function registrarLog($idEquipo, $accion, $mensaje) {
+    global $conn;
+    try {
+        $sql = "INSERT INTO logs_acciones (id_equipo, accion, mensaje, fecha) VALUES (?, ?, ?, NOW())";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("iss", $idEquipo, $accion, $mensaje);
+        $stmt->execute();
+    } catch (Exception $e) {
+        // Ignorar errores de logging
+    }
+}
 
 switch ($accion) {
+    case 'comando':
+        if (!$id || !isset($input['comando'])) { 
+            echo json_encode(["status"=>"error","mensaje"=>"ID y comando requeridos"]); 
+            exit; 
+        }
+        $comando = $input['comando'];
+        // Si llega nombre_pc, lo registramos en logs
+        $mensaje = "Comando '$comando' solicitado para la sesión $id";
+        if ($nombre_pc) $mensaje .= " (destino: $nombre_pc)";
+        registrarLog($nombre_pc ?? $id, 'comando', $mensaje);
+        // Aquí no ejecutamos WS; dashboard envía WS directamente
+        echo json_encode(["status"=>"ok","mensaje"=>$mensaje]);
+        break;
     case "renovar":
         if (!$id) { echo json_encode(["status"=>"error","mensaje"=>"ID requerido"]); exit; }
         $sql = "UPDATE sesiones SET id_estado_fk = 2, fecha_final_programada = DATE_ADD(NOW(), INTERVAL 1 MINUTE) WHERE id = ?";
-        $mensaje = "Sesión renovada";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i',$id);
+        if ($stmt->execute()) {
+            $mensaje = "Sesión $id renovada";
+            registrarLog($nombre_pc ?? $id, 'renovar', $mensaje);
+            echo json_encode(["status"=>"ok","mensaje"=>$mensaje]);
+        } else {
+            echo json_encode(["status"=>"error","mensaje"=>"Error SQL: ".$stmt->error]);
+        }
         break;
+
     case "finalizar":
         if (!$id) { echo json_encode(["status"=>"error","mensaje"=>"ID requerido"]); exit; }
         $sql = "UPDATE sesiones SET id_estado_fk = 1, fecha_final_real = NOW() WHERE id = ?";
-        $mensaje = "Sesión finalizada";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i',$id);
+        if ($stmt->execute()) {
+            $mensaje = "Sesión $id finalizada (registro DB)";
+            registrarLog($nombre_pc ?? $id, 'finalizar', $mensaje);
+            echo json_encode(["status"=>"ok","mensaje"=>$mensaje]);
+        } else {
+            echo json_encode(["status"=>"error","mensaje"=>"Error SQL: ".$stmt->error]);
+        }
         break;
     case "bloquear":
         if (!$id) { echo json_encode(["status"=>"error","mensaje"=>"ID requerido"]); exit; }
         $sql = "UPDATE sesiones SET id_estado_fk = 4 WHERE id = ?";
-        $mensaje = "Sesión bloqueada";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i',$id);
+        if ($stmt->execute()) {
+            $mensaje = "Sesión $id bloqueada";
+            registrarLog($nombre_pc ?? $id, 'bloquear', $mensaje);
+            echo json_encode(["status"=>"ok","mensaje"=>$mensaje]);
+        } else {
+            echo json_encode(["status"=>"error","mensaje"=>"Error SQL: ".$stmt->error]);
+        }
         break;
+
     case "suspender":
         if (!$id) { echo json_encode(["status"=>"error","mensaje"=>"ID requerido"]); exit; }
         $sql = "UPDATE sesiones SET id_estado_fk = 3 WHERE id = ?";
-        $mensaje = "Sesión suspendida";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i',$id);
+        if ($stmt->execute()) {
+            $mensaje = "Sesión $id suspendida";
+            registrarLog($nombre_pc ?? $id, 'suspender', $mensaje);
+            echo json_encode(["status"=>"ok","mensaje"=>$mensaje]);
+        } else {
+            echo json_encode(["status"=>"error","mensaje"=>"Error SQL: ".$stmt->error]);
+        }
         break;
+
     case "info":
         if (!$id) { echo json_encode(["status"=>"error","mensaje"=>"ID requerido"]); exit; }
         $sql = "SELECT s.*, e.nombre_estado FROM sesiones s LEFT JOIN estados e ON e.id_estado = s.id_estado_fk WHERE s.id = ?";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $data = $result->fetch_assoc();
+        echo json_encode(["status" => "ok", "mensaje" => "Información obtenida", "data" => $data]);
         break;
+
     default:
         echo json_encode(["status" => "error", "mensaje" => "Acción desconocida"]);
         exit;
 }
-
-$stmt = $conn->prepare($sql);
-if ($stmt === false) {
-    echo json_encode(["status" => "error", "mensaje" => "Error preparación SQL: " . $conn->error]);
-    exit;
-}
-$stmt->bind_param('i', $id);
-
-if (!$stmt->execute()) {
-    echo json_encode(["status" => "error", "mensaje" => "Error SQL: " . $stmt->error]);
-    exit;
-}
-
-if ($accion === 'info') {
-    $result = $stmt->get_result();
-    $data = $result->fetch_assoc();
-    echo json_encode(["status" => "ok", "mensaje" => $mensaje ?? "info", "data" => $data]);
-    exit;
-} else {
-    // Opcional: notificar al WS server (si tu WS expone un endpoint HTTP /notify)
-    // Descomenta y ajusta URL si tu servidor acepta POST HTTP para forzar broadcast.
-    
-    $notify = [
-      "tipo" => "actualizacion",
-      "accion" => $accion,
-      "id" => $id
-    ];
-    $ch = curl_init("http://localhost:8081/notify");
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($notify));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    $resp = curl_exec($ch);
-    curl_close($ch);
-    
-
-    echo json_encode(["status" => "ok", "mensaje" => "Acción '$accion' aplicada correctamente"]);
-    exit;
-}
-

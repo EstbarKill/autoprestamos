@@ -56,22 +56,33 @@
           <li>🔴 Bloqueados: <span id="stat-bloqueado">0</span></li>
           <li>⚫ Finalizados: <span id="stat-finalizado">0</span></li>
         </ul>
-            <!-- 🔔 Notificaciones en tiempo real -->
-<div class="mt-4">
-  <h5 class="text-success">📡 Registro en vivo</h5>
-  <div id="toast-container" class="position-fixed top-0 end-0 p-3" style="z-index: 9999;"></div>
-  <div id="logContainer" class="border border-success rounded p-3 bg-light text-dark"
-       style="height: 250px; width:225px; overflow-y: auto; font-size: 0.9rem;">
-    <p class="text-muted">Sin registros aún...</p>
-  </div>
-</div>
       </div>
-    </aside>
-
-
-
-
-
+  </aside>
+<!-- === Registros === -->
+<div id="pagina-regist" class="pagina">
+    <h3>📋 Registros del Sistema</h3>
+    
+    <!-- 🟢 CONTENEDOR DE LOGS CORREGIDO -->
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">Logs en Tiempo Real</h5>
+            <button class="btn btn-sm btn-outline-secondary" onclick="limpiarLogs()">
+                🗑️ Limpiar
+            </button>
+        </div>
+        <div class="card-body">
+            <!-- 🟢 ESTE ES EL CONTENEDOR QUE DEBE EXISTIR -->
+            <div id="logContainer" style="height: 400px; overflow-y: auto; background: #f8f9fa; padding: 10px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px;">
+                <p class="text-muted">Esperando registros...</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="mt-3">
+        <button class="btn btn-info" onclick="testLogs()">🧪 Probar Logs</button>
+        <button class="btn btn-warning" onclick="debugWebSocket()">🐛 Debug WebSocket</button>
+    </div>
+</div>
     <!-- === CONTENIDO === -->
     <main id="main" class="flex-grow-1 p-4">
       <div id="pagina-panel" class="pagina visible">
@@ -129,8 +140,10 @@
               <tr>
                 <th>ID</th>
                 <th>Usuario</th>
+                <th>Equipo</th>
                 <th>Inicio</th>
                 <th>Final Programado</th>
+                <th>Hora de Finalizacion</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
@@ -156,15 +169,7 @@
    
   </div>
 
-<!-- === Registros === -->
-<div id="pagina-regist" class="pagina">
-    <h3>Circulación del Servidor WebSocket</h3>
-    <div id="logsRegistros" class="logs">
-        <div class="logsCirculacion">
-          <button onclick="obtenerLogsServidor()">Conectar</button>
-        </div>
-    </div>
-</div>
+
 
       <div id="pagina-mensajes" class="pagina">
         <h2>💬 Mensajes a Equipos</h2>

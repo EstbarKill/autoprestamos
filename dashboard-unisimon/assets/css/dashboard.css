@@ -2,7 +2,6 @@
   --verde: #1b6b2a;
   --dorado: #cfae4a;
   --blanco: #ffffff;
-  --bg: #f4f6f8;
 }
 body { font-family: "Segoe UI", Tahoma, sans-serif; background-size: cover; background-color: var(--bg); margin:0; }
 #sidebar { width: 260px; min-height:100vh; background: linear-gradient(180deg,var(--verde), #0f4f1b); color:var(--blanco); }
@@ -15,6 +14,111 @@ body { font-family: "Segoe UI", Tahoma, sans-serif; background-size: cover; back
 .pagina { display:none; }
 .pagina.visible { display:block; animation: fadeIn .28s ease; }
 @keyframes fadeIn { from {opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+
+/* ============================================ */
+/* 📋 SECCIÓN DE LOGS EN TIEMPO REAL */
+/* ============================================ */
+
+#logContainer {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) rgba(0, 0, 0, 0.3);
+}
+
+#logContainer::-webkit-scrollbar {
+  width: 6px;
+}
+
+#logContainer::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+}
+
+#logContainer::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+#logContainer::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Entradas de log individuales */
+.log-entry {
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  border-left: 3px solid;
+  background: rgba(255, 255, 255, 0.05);
+  word-wrap: break-word;
+  animation: slideIn 0.3s ease-out;
+}
+
+.log-entry.log-success {
+  border-left-color: #28a745;
+  background: rgba(40, 167, 69, 0.1);
+}
+
+.log-entry.log-info {
+  border-left-color: #17a2b8;
+  background: rgba(23, 162, 184, 0.1);
+}
+
+.log-entry.log-warning {
+  border-left-color: #ffc107;
+  background: rgba(255, 193, 7, 0.1);
+}
+
+.log-entry.log-danger {
+  border-left-color: #dc3545;
+  background: rgba(220, 53, 69, 0.1);
+}
+
+.log-entry .log-time {
+  color: #6c757d;
+  font-size: 0.7rem;
+  margin-right: 6px;
+}
+
+.log-entry .log-message {
+  color: #e9ecef;
+  font-size: 0.75rem;
+}
+
+/* Animación de entrada */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Equipos conectados */
+#equiposConectados .badge {
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  animation: fadeIn 0.4s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Botón limpiar logs */
+.btn-outline-light:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
 
 #stats{
   width: fit-content;

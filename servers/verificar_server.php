@@ -1,4 +1,5 @@
 <?php
+/* 
 // servers/verificar_server.php
 header('Content-Type: application/json');
 
@@ -19,5 +20,5 @@ if ($conexion) {
         'status' => 'inactivo',
         'mensaje' => "No hay ningún proceso escuchando en el puerto $puerto"
     ]);
-}
-?>
+}*/
+?> 
