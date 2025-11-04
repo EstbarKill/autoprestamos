@@ -1,0 +1,775 @@
+# =============================================
+# 🧩 CLIENTE AUTOPRÉSTAMOS - UNISIMÓN (PowerShell)
+# Comunicación WebSocket + API + Control local
+# Autor: Sistema Autopréstamos
+# Versión: 1.5 (24-Oct-2025)
+# =============================================
+
+
+# =============================================
+# Cargar librer�as necesarias
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+# =============================================
+
+# =============================================
+# --- CONFIGURACIÓN ---
+$ServidorWS = "ws://localhost:8081"
+$idEquipo   = $env:COMPUTERNAME
+$wsClient   = [System.Net.WebSockets.ClientWebSocket]::new()
+$uri        = [System.Uri]$ServidorWS
+$LogoPath   = "C:\xampp\htdocs\autoprestamos\dashboard-unisimon\assets\img\logo.png"
+# =============================================
+
+                function Log($msg) {
+                    Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] $msg"
+                }
+# =============================================
+try {
+    $wsClient.ConnectAsync($uri, [Threading.CancellationToken]::None).Wait()
+    Write-Host "✅ Conectado al servidor WebSocket como $idEquipo"
+} catch {
+    Write-Host "❌ Error al conectar con el servidor WebSocket: $($_.Exception.Message)"
+    #exit
+}
+# =============================================
+
+# =============================================
+function Test-ServidorActivo {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://localhost/autoprestamos/servers/estado_server.php" -UseBasicParsing -TimeoutSec 3
+        $json = $resp.Content | ConvertFrom-Json
+        return $json.status -eq "corriendo"
+    } catch {
+        return $false
+    }
+}
+# =============================================
+
+# =============================================
+# --- REGISTRO DEL CLIENTE ---
+$msgJson = @{
+    accion = "UpdateStatus"
+    id     = $env:COMPUTERNAME
+} | ConvertTo-Json
+
+$msgBytes = [System.Text.Encoding]::UTF8.GetBytes($msgJson)
+$segment  = [System.ArraySegment[byte]]::new($msgBytes)
+# =============================================
+
+# =============================================
+# --- REGISTRO DE CLIENTE ---
+function Registrar-Cliente {
+    $msgJson = @{
+        accion = "UpdateStatus"
+        id     = $env:COMPUTERNAME
+    } | ConvertTo-Json
+
+    $msgBytes = [System.Text.Encoding]::UTF8.GetBytes($msgJson)
+    $segment  = [System.ArraySegment[byte]]::new($msgBytes)
+
+    try {
+        $global:wsClient.SendAsync(
+            $segment,
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            [Threading.CancellationToken]::None
+        ).Wait()
+        Log "📡 Cliente registrado → ID: $idEquipo"
+    } catch {
+        Log "❌ Error al registrar cliente: $($_.Exception.Message)"
+    }
+}
+
+# ============================================================
+# 🧩 ESCUCHA DE MENSAJES EN TIEMPO REAL (Dashboard ↔ Servidor)
+# ============================================================
+function Escuchar-WebSocket {
+    param ($wsClient)
+
+    $buffer = New-Object Byte[] 4096
+
+    while ($wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        try {
+            $result = $wsClient.ReceiveAsync(
+                ([ArraySegment[byte]]$buffer),
+                [Threading.CancellationToken]::None
+            ).Result
+
+            if ($result.Count -gt 0) {
+                $jsonString = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+                $data = $null
+                try { $data = $jsonString | ConvertFrom-Json -ErrorAction Stop } catch { }
+
+                if (-not $data) {
+                    Log "⚠️ Mensaje no válido recibido: $jsonString"
+                    continue
+                }
+
+                # 🧠 Verificar tipo de mensaje
+                switch ($data.tipo) {
+                    "control" {
+                        $accion = $data.accion
+                        Log "🎯 Acción recibida desde Dashboard → $accion"
+
+                        switch ($accion) {
+                            "bloquear" {
+                                rundll32.exe user32.dll,LockWorkStation
+                                Log "🟥 Equipo bloqueado"
+                            }
+                            "suspender" {
+                                rundll32.exe powrprof.dll,SetSuspendState 0,1,0
+                                Log "💤 Equipo suspendido"
+                            }
+                           "finalizar" {
+    # enviar confirmación primero (intento sincero de notificar antes de cerrar)
+    $payload = @{
+        tipo    = "log"
+        id      = $idEquipo
+        mensaje = "Acción 'finalizar' recibida — procediendo a cerrar sesión"
+    } | ConvertTo-Json -Compress
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    try {
+        $wsClient.SendAsync([ArraySegment[byte]$bytes,[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+        Start-Sleep -Milliseconds 300   # dar tiempo al envío
+    } catch { }
+    # luego ejecutar el cierre
+    shutdown /l /f
+    Log "⛔ Sesión finalizada por el administrador"
+}
+
+                            "renovar" {
+                                [System.Windows.Forms.MessageBox]::Show("♻️ Sesión renovada correctamente.","Autopréstamos")
+                                Log "🔄 Sesión renovada"
+                            }
+                            default {
+                                Log "❓ Acción desconocida: $accion"
+                            }
+                        }
+
+                        # 📨 Enviar confirmación al servidor
+                        $payload = @{
+                            tipo    = "log"
+                            id      = $idEquipo
+                            mensaje = "Acción '$accion' ejecutada correctamente"
+                        } | ConvertTo-Json -Compress
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+                        $wsClient.SendAsync(
+                            [ArraySegment[byte]]$bytes,
+                            [System.Net.WebSockets.WebSocketMessageType]::Text,
+                            $true,
+                            [Threading.CancellationToken]::None
+                        ).Wait()
+                    }
+
+                    "mensaje" {
+                        [System.Windows.Forms.MessageBox]::Show($data.texto, "Mensaje del administrador")
+                        Log "💬 Mensaje recibido del Dashboard: $($data.texto)"
+                    }
+
+                    "info" {
+                        $info = @{
+    usuario = $env:USERNAME
+    equipo  = $env:COMPUTERNAME
+    ip      = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | Select-Object -First 1).IPAddress
+    mac     = (Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | Select-Object -First 1).MacAddress
+}
+$payload = @{ tipo = "info_respuesta"; datos = $info } | ConvertTo-Json -Compress
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+$wsClient.SendAsync([ArraySegment[byte]]$bytes,[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+
+                    }
+
+                    default {
+                        Log "📩 Tipo de mensaje no reconocido: $($data.tipo)"
+                    }
+                }
+            }
+
+        } catch {
+            Log "⚠️ Error en la escucha WebSocket: $($_.Exception.Message)"
+            break
+        }
+
+        Start-Sleep -Milliseconds 200
+    }
+
+    Log "🔴 Conexión WebSocket cerrada."
+}
+
+
+# --- CONEXIÓN CON RETRY ---
+function Conectar-WebSocket {
+    param([int]$MaxReintentos = 5)
+    $intentos = 0
+    $global:wsClient = [System.Net.WebSockets.ClientWebSocket]::new()
+
+    while ($intentos -le $MaxReintentos) {
+        if (-not (Test-ServidorActivo)) {
+            Log "⚠️ Servidor WebSocket no disponible. No se intentará reconectar."
+            return $false
+        }
+
+        try {
+            Log "🔌 Intentando conectar a $ServidorWS ..."
+            $global:wsClient.ConnectAsync($uri, [Threading.CancellationToken]::None).Wait()
+
+            if ($global:wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                Log "✅ Conectado al servidor WebSocket como $idEquipo"
+                Registrar-Cliente
+                Start-Job -Name "EscuchaWebSocket" -ScriptBlock { param($ws) Escuchar-WebSocket -wsClient $ws } -ArgumentList $global:wsClient | Out-Null
+                return $true
+            }
+        } catch {
+            Log "❌ Error de conexión: $($_.Exception.Message)"
+        }
+
+        $intentos++
+        if ($intentos -le $MaxReintentos) {
+            Log "⏳ Reintentando conexión ($intentos/$MaxReintentos)..."
+            Start-Sleep -Seconds 3
+        } else {
+            Log "❌ Se alcanzó el límite de reintentos ($MaxReintentos)."
+            return $false
+        }
+    }
+}
+
+# --- PING PERIODICO PARA VERIFICAR ESTADO ---
+Start-Job -Name "PingServidor" -ScriptBlock {
+    while ($true) {
+        try {
+            $ping = Test-Connection -ComputerName "localhost" -Count 1 -Quiet -ErrorAction SilentlyContinue
+            if (-not $ping) {
+                Write-Host "[PING] ⚠️ No hay respuesta del servidor. Verificando reconexión..."
+                if (Test-ServidorActivo) {
+                    Conectar-WebSocket -MaxReintentos 2 | Out-Null
+                }
+            }
+        } catch { }
+        Start-Sleep -Seconds 30
+    }
+} | Out-Null
+
+# --- INICIO ---
+Conectar-WebSocket -MaxReintentos 3
+
+            # Crear formulario si no existe
+            # ============================
+            if (-not $form) {
+                $form = New-Object System.Windows.Forms.Form
+                $form.Text = "Gesti�n de Sesi�n"
+                $form.Size = [System.Drawing.Size]::new(400,200)
+                $form.StartPosition = "CenterScreen"
+            }
+
+            # ============================
+            # Logo (descargado de servidor)
+            # ============================
+            #$logo = New-Object System.Windows.Forms.PictureBox
+            #$logo.SizeMode = "StretchImage"
+            #$logo.Size     = [System.Drawing.Size]::new(80,80)
+            #$logo.Location = [System.Drawing.Point]::new(10,10)
+
+            #try {
+            #    $localPath = Join-Path $env:TEMP "logo.png"
+            #
+            # Descargar imagen
+            #    $wc = New-Object System.Net.WebClient
+            #   $wc.DownloadFile("http://192.168.56.100/prueba_equipos/logo.png", $localPath)
+
+                # Verificar que se descarg� correctamente
+            #   if (-not (Test-Path $localPath) -or ((Get-Item $localPath).Length -eq 0)) {
+            #      Write-Host "? El archivo no se descarg� correctamente o est� vac�o."
+                    # no return aqu�: dejamos que el script siga (si prefieres cortar, descomenta la l�nea siguiente)
+                    # return
+            # } else {
+                # Cargar imagen desde archivo local
+                #   $logo.Image = [System.Drawing.Image]::FromFile($localPath)
+                #}
+            #}
+            #catch {
+            #   Write-Host "?? Error al cargar el logo: $($_.Exception.Message)"
+            #}
+
+            # Agregar al formulario si est� definido
+            if ($form -and $logo.Image) {
+                $form.Controls.Add($logo)
+            }
+
+                function Format-Time([int]$segundos) {
+                    $ts = [TimeSpan]::FromSeconds($segundos)
+                    return "{0:00}:{1:00}:{2:00}" -f $ts.Hours, $ts.Minutes, $ts.Seconds
+                }
+
+                # ===== Obtener usuario/IP/MAC =====
+                $Username = $env:USERNAME
+
+
+
+# ================================
+# Detectar la interfaz con conexión a Internet activa
+# ================================
+if (-not (Test-Path $LogoPath)) { Write-Host "⚠️ Logo no encontrado: $LogoPath" }
+
+# Intentar identificar la interfaz con gateway activo (es la que tiene salida a Internet)
+$interfazActiva = Get-NetIPConfiguration |
+    Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" } |
+    Select-Object -First 1
+
+if ($interfazActiva) {
+    $mac = $interfazActiva.NetAdapter.MacAddress.Replace("-", ":")
+    $nombre = $interfazActiva.NetAdapter.InterfaceAlias
+    Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] ✅ Interfaz activa: $nombre"
+    Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] 🧭 MAC con Internet: $mac"
+} else {
+    Write-Host "[LOG $(Get-Date -Format 'HH:mm:ss')] ❌ No se encontró ninguna interfaz con conexión a Internet activa."
+}
+
+
+
+        # Convertir expirationDate (UTC) a hora local de Colombia
+        function Convert-ToColombiaDate {
+            param([string]$utcString)
+
+            try {
+                $dtUtc = [System.Xml.XmlConvert]::ToDateTime($utcString, [System.Xml.XmlDateTimeSerializationMode]::Utc)
+                $tzCol = [System.TimeZoneInfo]::FindSystemTimeZoneById("SA Pacific Standard Time") 
+                $dtCol = [System.TimeZoneInfo]::ConvertTimeFromUtc($dtUtc, $tzCol)
+                return $dtCol.ToString(
+            "dddd, dd 'de' MMMM 'de' yyyy",
+            [System.Globalization.CultureInfo]::GetCultureInfo("es-CO")
+        )
+            }
+            catch {
+                return $utcString
+            }
+        }
+
+                # ===== Funci�n API (se usa tambi�n para validaci�n inicial) =====
+                function Call-Api($extraBody = @{}) {
+                    $body = @{ username = $Username; mac_address = $mac} + $extraBody
+                    $json = $body | ConvertTo-Json -Compress
+                    $headers = @{ "Content-Type" = "application/json" }
+                    try {
+                        $resp = Invoke-RestMethod -Uri $ApiUrl -Method Post -Headers $headers -Body $json -TimeoutSec 60
+                        Log ("? Respuesta API: " + ($resp | ConvertTo-Json -Compress))
+                        return $resp
+                    }
+                    catch [System.Net.WebException] {
+                        $errorMsg = "? Error de conexi�n con la API: $($_.Exception.Message) ... $body ... JSON $json"
+                        Log $errorMsg
+                        return @{ estado="Error"; mensaje=$errorMsg }
+                    }
+                    catch {
+                        $errorMsg = "?? Error inesperado: $($_.Exception.Message)"
+                        Log $errorMsg
+                        return @{ estado="Error"; mensaje=$errorMsg }
+                    }
+                }
+
+                # ===== Ventana principal =====
+                $form = New-Object System.Windows.Forms.Form
+                $form.Text = $Titulo
+                $form.Size = [System.Drawing.Size]::new(400,200)
+                $form.StartPosition = "Manual"
+                $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+                $form.ShowInTaskbar = $false
+                $form.MinimizeBox = $true
+                $form.MaximizeBox = $false
+                $form.ControlBox = $true
+                $form.Location = [System.Drawing.Point]::new(
+                    [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width - 400,
+                    [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 250
+                )
+
+                $form.Add_FormClosing({
+                    if ($_.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing) {
+                        # impedir cierre por usuario
+                        $_.Cancel = $true
+                    }
+try {
+    if ($wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        Write-Host "🔒 Cerrando salida WebSocket..."
+        $wsClient.CloseOutputAsync('NormalClosure', 'Fin de sesión', [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        Start-Sleep -Milliseconds 300
+    }
+    Write-Host "✅ Canal de salida cerrado correctamente."
+} catch {
+    Write-Host "⚠️ Error al cerrar WebSocket de forma controlada: $($_.Exception.Message)"
+}
+
+
+                })
+
+                $btnReducir = New-Object System.Windows.Forms.Button
+                $btnReducir.Text = "Reducir"
+                $btnReducir.Size = [System.Drawing.Size]::new(80,28)
+                $btnReducir.Location = [System.Drawing.Point]::new($form.Width - 100, $form.Height - 68)
+                $btnReducir.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+                $btnReducir.Add_Click({
+                    if ($form.Height -gt 120) {
+                        $form.Refresh()
+                        $logo.Size = [System.Drawing.Size]::new(170,60)
+                        $logo.Location = [System.Drawing.Point]::new(0,0)
+                        $form.Size = [System.Drawing.Size]::new(280,100)
+                        $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",13,[System.Drawing.FontStyle]::Bold)
+                        $labelInfo.Location = [System.Drawing.Point]::new(170,5)
+                        $labelInfo.Text = "$($response.estado)"
+                        $labelInfo.ForeColor = [System.Drawing.Color]::DarkGreen
+                        $btnReducir.Text = "Maximizar"
+                    } else {
+                        $form.Refresh()
+                        $logo.Size = [System.Drawing.Size]::new(110,80)
+                        $logo.Location = [System.Drawing.Point]::new(10,10)
+                        $labelInfo.Location = [System.Drawing.Point]::new(150,10)
+                        $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+                        $labelInfo.Text = "Usuario: $Username`n MAC: $mac"
+                        $form.Size = [System.Drawing.Size]::new(400,200)
+                        $btnReducir.Text = "Minimizar"
+                    }
+                })
+                $form.Controls.Add($btnReducir)
+
+                $logo = New-Object System.Windows.Forms.PictureBox
+                $logo.SizeMode = "StretchImage"
+                $logo.Size = [System.Drawing.Size]::new(80,80)
+                $logo.Location = [System.Drawing.Point]::new(10,10)
+                # si $LogoPath es una URL, el FromFile fallar�: preferible usar la descarga previa; si falla, se intenta usar $LogoPath directo
+                try {
+                    $logo.Image = [System.Drawing.Image]::FromFile($LogoPath)
+                } catch {
+                    # ignore, ya cargamos antes desde $localPath si estaba disponible
+                    if ($logo.Image -eq $null -and (Test-Path $localPath)) {
+                        $logo.Image = [System.Drawing.Image]::FromFile($localPath)
+                    }
+                }
+                $form.Controls.Add($logo)
+
+                $labelInfo = New-Object System.Windows.Forms.Label
+                $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",12)
+                $labelInfo.Location = [System.Drawing.Point]::new(100,10)
+                $labelInfo.AutoSize = $true
+                $form.Controls.Add($labelInfo)
+
+                $labelInfo2 = New-Object System.Windows.Forms.Label
+                $labelInfo2.Font = New-Object System.Drawing.Font("Segoe UI",12)
+                $labelInfo2.Location = [System.Drawing.Point]::new(100,10)
+                $labelInfo2.AutoSize = $true
+                $form.Controls.Add($labelInfo2)
+
+                $labelTimer = New-Object System.Windows.Forms.Label
+                $labelTimer.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
+                $labelTimer.Location = [System.Drawing.Point]::new(30,100)
+                $labelTimer.AutoSize = $true
+                $form.Controls.Add($labelTimer)
+# =============================================
+            function Show-VentanaSesion {
+                    param (
+                    [string]$Titulo = "Gestion de Seccion",
+                    [string]$ClaveAdmin = "S1m0n_2025",
+                    [string]$ApiUrl     = "http://localhost/autoprestamos/prueba_equipos/api.php"
+                )
+            # ============================
+                
+
+                # ===== Inicio Sesi�n =====
+            $response = Call-Api @{ confirmar_inicio = $true }
+            if ($response.estado) {
+                $form.Show()
+                # ===== Bucle principal =====
+                while ($response -and $response.estado -ne "Finalizado" -and $response.estado -ne "Restringido") {
+                    $global:SuspendidoProcesado = $false
+                    switch ($response.estado) {
+                        "Abierto" {
+                            Start-Process -FilePath "explorer.exe"
+                            $labelInfo.Text = "Usuario: $Username`n MAC: $mac"
+                            $labelTimer.ForeColor = [System.Drawing.Color]::DarkGreen
+                            $tiempo = if ($response.tiempo_restante) { $response.tiempo_restante } else { 30 }
+                            for ($i=$tiempo; $i -ge 0; $i--) {
+                                $labelTimer.Text = "?? SESI�N ACTIVA - Restante: $(Format-Time $i)"
+                                $form.Refresh()
+                                $waitUntil = (Get-Date).AddSeconds(1)
+                                while ((Get-Date) -lt $waitUntil) {
+                                    [System.Windows.Forms.Application]::DoEvents()
+                                    Start-Sleep -Milliseconds 50
+                                }
+                            }
+                            $response = Call-Api
+                        }
+
+        "Suspendido" {
+            if (-not $global:SuspendidoProcesado) {
+                $global:SuspendidoProcesado = $true
+
+                # Crear modal de desbloqueo
+                $modal = New-Object System.Windows.Forms.Form
+                $modal.FormBorderStyle = 'None'
+                $modal.StartPosition   = 'CenterScreen'
+                $modal.Size            = [System.Drawing.Size]::new(400,250)
+                $modal.BackColor       = [System.Drawing.Color]::FromArgb(240,240,240)
+                $modal.TopMost         = $true
+
+                $labelModal = New-Object System.Windows.Forms.Label
+                $labelModal.Font      = New-Object System.Drawing.Font("Segoe UI",12,[System.Drawing.FontStyle]::Bold)
+                $labelModal.Text      = "⏸ Sesión suspendida. Ingrese clave:"
+                $labelModal.AutoSize  = $true
+                $labelModal.Location  = [System.Drawing.Point]::new(50,30)
+                $modal.Controls.Add($labelModal)
+
+                $script:progress = New-Object System.Windows.Forms.ProgressBar
+                $script:progress.Location = [System.Drawing.Point]::new(50,70)
+                $script:progress.Size     = [System.Drawing.Size]::new(300,20)
+                $script:progress.Maximum  = 30
+                $modal.Controls.Add($script:progress)
+
+                $textBox = New-Object System.Windows.Forms.TextBox
+                $textBox.UseSystemPasswordChar = $true
+                $textBox.Width    = 200
+                $textBox.Location = [System.Drawing.Point]::new(100,110)
+                $modal.Controls.Add($textBox)
+
+                $btnValidar = New-Object System.Windows.Forms.Button
+                $btnValidar.Text     = "Validar"
+                $btnValidar.Location = [System.Drawing.Point]::new(80,160)
+                $modal.Controls.Add($btnValidar)
+
+                $btnCancelar = New-Object System.Windows.Forms.Button
+                $btnCancelar.Text     = "Cancelar"
+                $btnCancelar.Location = [System.Drawing.Point]::new(200,160)
+                $modal.Controls.Add($btnCancelar)
+
+                # === NUEVO: Capturar tecla Enter ===
+                $textBox.Add_KeyDown({
+                    if ($_.KeyCode -eq 'Enter') {
+                        $btnValidar.PerformClick()
+                    }
+                })
+
+                # Flags de control
+                $script:desbloqueado = $false
+                $script:cancelado    = $false
+                $script:intentosFails = $false
+                $script:segundos     = 30
+                $script:intentos     = 0
+
+                # Eventos botones
+                $btnValidar.Add_Click({
+                    if ($textBox.Text -eq $ClaveAdmin) {
+                        $script:desbloqueado = $true
+                        Log "✅ Clave correcta ingresada"
+                        $modal.Close()
+                    } else {
+                        $script:intentos++
+                        Log "❌ Clave incorrecta ($script:intentos intentos)"
+                        $textBox.Clear(); $textBox.Focus()
+                    }
+                    if($script:intentos -gt 3){
+                        Log "⚠️ Demasiados intentos fallidos"
+                        $intentosFails = $true
+                    }
+                    if ($script:timer.Enabled) { $script:timer.Stop() }
+                })
+
+                $btnCancelar.Add_Click({
+                    $script:cancelado = $true
+                    Log "🚫 Usuario canceló → Bloqueado"
+                    if ($script:timer.Enabled) { $script:timer.Stop() }
+                    $modal.Close()
+                })
+
+                # Timer visual
+                $script:timer = New-Object System.Windows.Forms.Timer
+                $script:timer.Interval = 1000
+                $script:timer.Add_Tick({
+                    if ($script:segundos -ge 0) {
+                        $script:progress.Value = $script:progress.Maximum - $script:segundos
+                        $script:segundos--
+                    } else {
+                        $script:timer.Stop()
+                        $modal.Close()
+                    }
+                })
+                $script:timer.Start()
+
+                # Mostrar ventana sin bloquear flujo
+                $modal.Show()
+                $textBox.Focus()  # Foco inicial al campo clave
+
+                # Bucle no bloqueante
+                while ($response.estado -eq "Suspendido" -and $modal.Visible) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 100
+                    if ($script:desbloqueado) {
+                        $response = Call-Api @{ clave_admin = $ClaveAdmin }
+                        break
+                    }
+                    if ($script:cancelado) {
+                        $response = Call-Api @{ cancel_suspend = "Cancelar" }
+                        break
+                    }
+                    if ($script:segundos -le 0) {
+                        $response = Call-Api @{ cancel_suspend = "Expirado" }
+                        break
+                    }
+                    if ($script:intentosFails) {
+                        $response = Call-Api @{ cancel_suspend = "Intentos" }
+                        break
+                    }
+                }
+            }
+        }
+
+
+                        "Bloqueado" {
+                            $labelTimer.ForeColor = [System.Drawing.Color]::Red
+                            # Verificar si el check-in fue exitoso
+                            if ($response.folioCheckin -and $response.folioCheckin.raw -and $response.folioCheckin.raw.loan.status.name -eq "Closed") {
+                                Log "? Check-in exitoso detectado en estado Bloqueado"
+                                # Hacer una llamada adicional a la API para obtener el estado Finalizado
+                                $response = Call-Api
+                                $waitUntil = (Get-Date).AddSeconds(1)
+                                while ((Get-Date) -lt $waitUntil) {
+                                    [System.Windows.Forms.Application]::DoEvents()
+                                    Start-Sleep -Milliseconds 50
+                                }
+                                continue
+                            }
+
+$tiempo = if ($response.tiempo_restante) { $response.tiempo_restante } else { 10 }
+for ($i=$tiempo; $i -ge 0; $i--) {
+    $labelTimer.Text = "🔒 BLOQUEADO - Restante: $(Format-Time $i)"
+    $form.Refresh()
+    $waitUntil = (Get-Date).AddSeconds(1)
+    while ((Get-Date) -lt $waitUntil) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 50
+    }
+}
+$response = Call-Api
+                        }
+
+                        "Error" {
+                            # Mostrar mensaje de error
+                            [System.Windows.Forms.MessageBox]::Show(
+                                $response.mensaje,
+                                "? Error de sesi�n",
+                                [System.Windows.Forms.MessageBoxButtons]::OK,
+                                [System.Windows.Forms.MessageBoxIcon]::Error
+                            )
+                            # Cerrar formulario inmediatamente
+                            $form.Close()
+                            return
+                        }
+
+                        "Renovado" {
+                            $labelTimer.ForeColor = [System.Drawing.Color]::Blue
+                            $labelTimer.Text = "?? Renovaci�n en curso..."
+                            $form.Refresh()
+                            # Repetir consultas hasta que la API devuelva "Abierto" (o un estado distinto a 'Renovado'/'Renovando')
+                            do {
+                                $response = Call-Api
+                                # esperar 1s amigable con UI
+                                $waitUntil = (Get-Date).AddSeconds(1)
+                                while ((Get-Date) -lt $waitUntil) {
+                                    [System.Windows.Forms.Application]::DoEvents()
+                                    Start-Sleep -Milliseconds 50
+                                }
+                            } while ($response.estado -eq "Renovado" -or $response.estado -eq "Renovando")
+                            $response = Call-Api 
+                        }
+
+                        Default {
+                            # Si FOLIO devolvi� un pr�stamo cerrado directamente
+                            if ($response.folioResp -and $response.folioResp.raw.loan.status.name -eq "Closed") {
+                                Log "? Sesi�n finalizada por FOLIO (Closed)"
+                                $form.Close()
+                                return
+                            }
+                        }
+                    } # end switch
+                } # end while
+    if ($response.estado -eq "Finalizado") {
+        $labelInfo.ForeColor = [System.Drawing.Color]::Blue
+        $labelTimer.Text = "✅ Sesión finalizada correctamente"
+        $form.Refresh()
+        Start-Sleep -Seconds 2
+        $form.Close()
+        Log "✅ Script finalizado completamente."
+    }
+        if ($response.estado -eq "Restringido") {
+            # Redimensionar ventana
+            $form.Location = [System.Drawing.Point]::new(
+                [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width - 1400,
+                [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 800
+            )
+            $form.Size = [System.Drawing.Size]::new(900,500)
+
+            # Título Estado
+            $labelInfo.ForeColor = [System.Drawing.Color]::Red
+            $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI", 16, [System.Drawing.FontStyle]::Bold)
+            $labelInfo.Text = "🚫 $($response.estado): Usuario restringido por bloqueos en FOLIO"
+            $labelInfo.Location = [System.Drawing.Point]::new(100,20)
+
+            # Cuadro de texto multilinea para mostrar bloqueos
+            $txtBloqueos = New-Object System.Windows.Forms.TextBox
+            $txtBloqueos.Multiline = $true
+            $txtBloqueos.ScrollBars = "Vertical"
+            $txtBloqueos.Font = New-Object System.Drawing.Font("Consolas", 14)
+            $txtBloqueos.ReadOnly = $true
+            $txtBloqueos.BackColor = [System.Drawing.Color]::White
+            $txtBloqueos.Size = [System.Drawing.Size]::new(750,350)
+            $txtBloqueos.Location = [System.Drawing.Point]::new(20,100)
+            $form.Controls.Add($txtBloqueos)
+
+            # Botón cerrar con cuenta regresiva
+            $btnReducir.Size = [System.Drawing.Size]::new(100,40)
+            $btnReducir.Location = [System.Drawing.Point]::new(785,420)
+            $form.Controls.Add($btnReducir)
+
+            # Mostrar bloqueos en el cuadro
+            if ($response.bloqueos.manuales) {
+                $detalles = foreach ($m in $response.bloqueos.manuales) {
+                    "📌 Tipo: $($m.type)`r`n" +
+                    "Descripción: $($m.desc)`r`n" +
+                    "Mensaje: $($m.patronMessage)`r`n" +
+                    "Expira: $(Convert-ToColombiaDate $m.expirationDate)`r`n" +
+                    "---------------------------------------------`r`n"
+                }
+                $txtBloqueos.Text = ($detalles -join "`r`n")
+            }
+            elseif ($response.bloqueos.automaticos) {
+                $detalles = foreach ($a in $response.bloqueos.automaticos) {
+                    "⚡ Automático:`r`n" +
+                    "Mensaje: $($a.message)`r`n" +
+                    "---------------------------------------------`r`n"
+                }
+                $txtBloqueos.Text = ($detalles -join "`r`n")
+            }
+
+            # Timer de autocierre (6 segundos) con bucle manual
+            $segundos = 6
+            for ($i = $segundos; $i -ge 1; $i--) {
+                $btnReducir.Text = "Cerrar ($i)"
+                $form.Refresh()
+
+                $waitUntil = (Get-Date).AddSeconds(1)
+                while ((Get-Date) -lt $waitUntil) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 50
+                }
+            }
+            # Acción manual (clic en cerrar)
+            $btnReducir.Add_Click({
+                $script:timer
+                $form.Close()
+                exit;
+            })
+
+            $form.Refresh()
+        }
+            }
+
+            }
+            # Ejecutar
+            Show-VentanaSesion -Titulo "Gesti�n de Sesi�n con API"
