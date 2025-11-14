@@ -1,6 +1,6 @@
 <?php
 // auth.php
-require 'db.php'; // Asegúrate de que este archivo exista y contenga la conexión a la base de datos
+require '../config/db.php'; // Asegúrate de que este archivo exista y contenga la conexión a la base de datos
 
 function validarUsuarioYEquipo($conn, $username, $token, $mac_address) {
     // Usuario en FOLIO

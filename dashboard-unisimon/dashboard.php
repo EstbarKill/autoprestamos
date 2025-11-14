@@ -20,6 +20,15 @@
     <span id="fechaActual" class="fw-semibold"></span>
     <span id="statusDot" style="width:15px;height:15px;border-radius:50%;display:inline-block;background:#d00;"></span>
     <span id="statusText" class="fw-bold text-success"></span>
+    
+    <!-- 🏢 SELECT PUNTO DE SERVICIO -->
+    <select id="selectSede" class="form-select w-auto" onchange="cambiarSede()">
+      <option value="">-- Seleccionar / General --</option>
+      <option value="1">📚 Biblioteca Central José Martí</option>
+      <option value="2">📰 Hemeroteca Ana Bolivar de Consuegra</option>
+      <option value="3">🏛️ Biblioteca de Posgrado</option>
+    </select>
+    
     <button id="toggleBtn" class="btn btn-outline-danger md-1" onclick="toggleServidor()">Conectar</button>
   </div>
 </nav>
@@ -40,9 +49,7 @@
         <button class="btn btn-light w-100 mb-2" onclick="mostrarPagina('config')">
           <i class="bi bi-gear"></i> Configuración
         </button>
-        <button class="btn btn-light w-100 mb-2" onclick="mostrarPagina('regist')">
-          <i class="bi bi-gear"></i> Registros
-        </button>
+        <!-- Registros movidos a la barra lateral (siempre visibles cuando WS activo) -->
         <button class="btn btn-light w-100" onclick="mostrarPagina('mensajes')">
           <i class="bi bi-chat-dots"></i> Mensajes
         </button>
@@ -54,35 +61,27 @@
           <li>🟢 Abiertos: <span id="stat-abierto">0</span></li>
           <li>🟡 Suspendidos: <span id="stat-suspendido">0</span></li>
           <li>🔴 Bloqueados: <span id="stat-bloqueado">0</span></li>
+          <li>🟡 Hibernado: <span id="stat-Hibernado">0</span></li>
           <li>⚫ Finalizados: <span id="stat-finalizado">0</span></li>
         </ul>
+              
+      <!-- Logs en tiempo real: siempre visibles en la barra lateral cuando el dashboard está conectado -->
+      <div id="sidebar-logs" class="mt-3">
+        <div class="card" style="background:rgba(255, 255, 255, 0.92); border:none;">
+          <div class="card-header d-flex justify-content-between align-items-center bg-transparent border-0 p-2">
+            <strong class="m-0">📋 Registros</strong>
+            <button class="btn btn-sm btn-light" onclick="limpiarLogs()">🗑️</button>
+          </div>
+          <div class="card-body p-2" style="max-height:260px; overflow:auto; font-family: 'Courier New', monospace; font-size:12px;">
+            <div id="logContainer">
+              <p class="text-white-50 small mb-0">Esperando registros...</p>
+            </div>
+          </div>
+        </div>
+      </div>
       </div>
   </aside>
-<!-- === Registros === -->
-<div id="pagina-regist" class="pagina">
-    <h3>📋 Registros del Sistema</h3>
-    
-    <!-- 🟢 CONTENEDOR DE LOGS CORREGIDO -->
-    <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">Logs en Tiempo Real</h5>
-            <button class="btn btn-sm btn-outline-secondary" onclick="limpiarLogs()">
-                🗑️ Limpiar
-            </button>
-        </div>
-        <div class="card-body">
-            <!-- 🟢 ESTE ES EL CONTENEDOR QUE DEBE EXISTIR -->
-            <div id="logContainer" style="height: 400px; overflow-y: auto; background: #f8f9fa; padding: 10px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px;">
-                <p class="text-muted">Esperando registros...</p>
-            </div>
-        </div>
-    </div>
-    
-    <div class="mt-3">
-        <button class="btn btn-info" onclick="testLogs()">🧪 Probar Logs</button>
-        <button class="btn btn-warning" onclick="debugWebSocket()">🐛 Debug WebSocket</button>
-    </div>
-</div>
+<!-- NOTE: El panel de registros fue movido a la barra lateral. -->
     <!-- === CONTENIDO === -->
     <main id="main" class="flex-grow-1 p-4">
       <div id="pagina-panel" class="pagina visible">
@@ -94,9 +93,10 @@
             <option value="Abierto">Abierto</option>
             <option value="Suspendido">Suspendido</option>
             <option value="Bloqueado">Bloqueado</option>
+            <option value="Hibernado">Hibernado</option>
             <option value="Finalizado">Finalizado</option>
           </select>
-          <button class="btn btn-outline-success ms-2" onclick="actualizarTabla()">🔄 Actualizar</button>
+          <button class="btn btn-outline-success ms-2" onclick="actualizarDatos()">🔄 Actualizar</button>
         </div>
 <!-- Modal de Información -->
 <div class="modal" tabindex="-1" id="modalInfo" aria-labelledby="modalInfoLabel" aria-hidden="true">
@@ -131,8 +131,6 @@
     </div>
   </div>
 </div>
-
-
         <div class="tabla-container shadow">
           
           <table class="table table-hover align-middle text-center" id="tablaSesiones">

@@ -1,6 +1,6 @@
 <?php
 // dashboard_action.php - VERSIÓN MEJORADA
-include 'db.php';
+include '../config/db.php';
 header('Content-Type: application/json');
 
 $input = json_decode(file_get_contents("php://input"), true);
@@ -9,7 +9,7 @@ if (!$input || !isset($input['accion'])) {
     exit;
 }
 
-$accion = $input['accion'];
+$tipo = $input['accion'];
 $id = isset($input['id']) ? (int)$input['id'] : null;
 $nombre_pc = isset($input['nombre_pc']) ? $input['nombre_pc'] : null;
 
@@ -26,7 +26,7 @@ function registrarLog($idEquipo, $accion, $mensaje) {
     }
 }
 
-switch ($accion) {
+switch ($tipo) {
     case 'comando':
         if (!$id || !isset($input['comando'])) { 
             echo json_encode(["status"=>"error","mensaje"=>"ID y comando requeridos"]); 
@@ -97,7 +97,11 @@ switch ($accion) {
 
     case "info":
         if (!$id) { echo json_encode(["status"=>"error","mensaje"=>"ID requerido"]); exit; }
-        $sql = "SELECT s.*, e.nombre_estado FROM sesiones s LEFT JOIN estados e ON e.id_estado = s.id_estado_fk WHERE s.id = ?";
+        // Incluir nombre_pc desde la tabla equipos si existe la relación
+        $sql = "SELECT s.*, e.nombre_estado, eq.nombre_pc FROM sesiones s 
+                LEFT JOIN estados e ON e.id_estado = s.id_estado_fk
+                LEFT JOIN equipos eq ON eq.id_equipo = s.id_equipo_fk
+                WHERE s.id = ?";
         $stmt = $conn->prepare($sql);
         $stmt->bind_param('i', $id);
         $stmt->execute();

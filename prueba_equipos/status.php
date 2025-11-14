@@ -6,6 +6,7 @@ const ESTADO_FINALIZADO = 1;
 const ESTADO_ABIERTO    = 2;
 const ESTADO_SUSPENDIDO = 3;
 const ESTADO_BLOQUEADO  = 4;
+const ESTADO_HIBERNANDO  = 5;
 
 function actualizarEstado($conn, $sesionId, $nuevoEstado, $fechaFinal = null) {
     if ($fechaFinal) {
