@@ -1,0 +1,78 @@
+name: Autoprestamos Code Review
+
+on:
+  push:
+    branches: [ "main", "refactor/**" ]
+  pull_request:
+    branches: [ "main", "refactor/**" ]
+
+jobs:
+
+  security_analysis:
+    name: CodeQL Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: php, javascript, powershell
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v3
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+
+
+  php_quality:
+    name: PHP Quality Checks
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.2'
+        coverage: none
+
+    - name: Validate composer
+      run: composer validate --strict || true
+
+    - name: Install dependencies
+      run: composer install --no-interaction --no-progress
+
+    - name: Composer Audit
+      run: composer audit --no-interaction || true
+
+    - name: PHPStan Static Analysis
+      run: vendor/bin/phpstan analyse --memory-limit=1G || true
+
+
+
+  powershell_linting:
+    name: PowerShell Linting
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Install PSScriptAnalyzer
+      shell: pwsh
+      run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+    - name: Run PowerShell Analysis
+      shell: pwsh
+      run: Invoke-ScriptAnalyzer -Path "./" -Recurse -Severity Warning -ReportSummary
