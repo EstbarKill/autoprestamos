@@ -3,12 +3,16 @@
 header('Content-Type: application/json');
 
 // Incluir los archivos modulares
+require_once __DIR__ . '/ratelimit.php';
+require_once __DIR__ . '/validation.php';
+
 require '../config/db.php';
 require 'tokenByron.php';
 require 'utils.php';
 require 'folio.php';
 require 'auth.php';
 require 'status.php';
+
 
 date_default_timezone_set('America/Bogota');
 
@@ -45,6 +49,12 @@ $userId = $authData['userId'];
 $username_full = $authData['user']['username'];
 $manualblock = folioManualBlock($userId, $token);
 $autoblock   = folioAutoBlock($userId, $token);
+
+if (!ratelimit_check($_SERVER['REMOTE_ADDR'], 30, 60)) {
+   http_response_code(429);
+   echo json_encode(['status'=>'error','mensaje'=>'Too many requests']);
+   exit;
+}
 
 if (!empty($manualblock) || !empty($autoblock)) {
     $detalles = [];

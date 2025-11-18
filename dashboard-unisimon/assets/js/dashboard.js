@@ -39,54 +39,52 @@ document.addEventListener("DOMContentLoaded", function () {
   
   // Restaurar conexión si estaba conectada antes del reload
   const estabaConectado = localStorage.getItem("dashboard_conectado");
-  if (estabaConectado === "true") {
-    console.log("🔄 Reestableciendo conexión automática...");
-    // Solo reconectar automáticamente si ya se seleccionó una sede
-    if (sedeSeleccionada) {
-      setTimeout(() => {
-        conectarD();
-      }, 1000); // Esperar 1 segundo para asegurar que el DOM está listo
-    } else {
-      mostrarToast('⚠️ Selecciona una sede antes de reconectar automáticamente');
-    }
+if (estabaConectado === "true") {
+  console.log("🔄 Reestableciendo conexión automática...");
+
+  if (sedeSeleccionada) {
+    setTimeout(async () => {
+      await ensureToken();
+      await conectarD();
+    }, 800);
+  } else {
+    mostrarToast('⚠️ Selecciona una sede antes de reconectar automáticamente');
   }
+}
+
 });
 
 
 
 // 🟢 FUNCIÓN CORREGIDA - Conectar Dashboard
 async function conectarD() {
-  if (typeof conectarWS === "function") {
-    // Requerir que el admin haya seleccionado una sede antes de conectar
-    if (!sedeSeleccionada) {
-      mostrarToast('⚠️ Debes seleccionar una sede antes de conectar');
-      return;
-    }
+  if (!sedeSeleccionada) {
+    mostrarToast('⚠️ Debes seleccionar una sede antes de conectar');
+    return;
+  }
 
-    try {
-      const ok = await conectarWS();
-      if (ok) {
-        // Aplicar filtro por sede SOLO después de conectar correctamente
-        await aplicarFiltroSede();
-        conectado = true;
-        // Guardar estado de conexión en localStorage
-        localStorage.setItem("dashboard_conectado", "true");
-      } else {
-        conectado = false;
-        localStorage.setItem("dashboard_conectado", "false");
-        mostrarToast("❌ No se pudo conectar al servidor WebSocket");
-      }
-    } catch (err) {
-      console.error("Error al conectar WS:", err);
+  try {
+    // PRIMERO: obtener token obligatorio
+    await ensureToken();
+
+    // SEGUNDO: conectar WebSocket
+    const ok = await conectarWS();
+
+    if (ok) {
+      await aplicarFiltroSede();
+      conectado = true;
+      localStorage.setItem("dashboard_conectado", "true");
+    } else {
       conectado = false;
       localStorage.setItem("dashboard_conectado", "false");
-      mostrarToast("❌ Error al intentar conectar al WebSocket");
+      mostrarToast("❌ No se pudo conectar al servidor WebSocket");
     }
-  } else {
-    console.error("conectarWS no está definido");
-    mostrarToast("❌ Error: WebSocket no disponible");
+  } catch (err) {
+    console.error("Error al conectar:", err);
+    mostrarToast("❌ Error general al conectar");
   }
 }
+
 
 // 🔴 FUNCIÓN CORREGIDA - Desconectar
 function desconectar() {
@@ -975,6 +973,65 @@ function limpiarLogsViejos() {
   if (logs.length === 0) {
     logContainer.innerHTML = "<p class='text-muted'>Sin registros recientes...</p>";
   }
+}
+
+// al cargar dashboard: pedir token si no existe
+async function ensureToken() {
+
+    const sedeSeleccionada = localStorage.getItem("sede_seleccionada");
+    let token = localStorage.getItem("autoprestamos_jwt_token");
+
+    // Si ya existe token, salir
+    if (token && token !== "null" && token.trim() !== "") {
+        return token;
+    }
+
+    // Validar sede
+    if (!sedeSeleccionada) {
+        console.error("❌ No hay sede seleccionada para generar token");
+        mostrarToast("⚠️ Selecciona una sede antes de conectar", "warning");
+        return null;
+    }
+
+    try {
+const tokenResponse = await fetch("../prueba_equipos/token.php", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "sede=" + encodeURIComponent(localStorage.getItem("sede_seleccionada"))
+});
+
+        // Validar respuesta vacía
+        const text = await tokenResponse.text();
+        if (!text || text.trim() === "") {
+            console.error("❌ token.php devolvió vacío");
+            mostrarToast("❌ No se pudo obtener token", "danger");
+            return null;
+        }
+
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (err) {
+            console.error("❌ token.php devolvió algo que NO es JSON:", text);
+            mostrarToast("❌ Error interpretando token", "danger");
+            return null;
+        }
+
+        if (data.token) {
+            localStorage.setItem("autoprestamos_jwt_token", data.token);
+            console.log("🔐 Token generado correctamente:", data.token);
+            return data.token;
+        } else {
+            console.error("❌ token.php dice error:", data);
+            mostrarToast("❌ Error generando token", "danger");
+            return null;
+        }
+
+    } catch (err) {
+        console.error("❌ Error solicitando token:", err);
+        mostrarToast("❌ No se pudo solicitar token", "danger");
+        return null;
+    }
 }
 
 // Ejecutar limpieza periódica para garantizar FIFO y expiración

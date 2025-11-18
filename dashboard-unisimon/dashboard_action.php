@@ -1,9 +1,15 @@
 <?php
 // dashboard_action.php - VERSIÓN MEJORADA
+require_once dirname(__DIR__) . '/prueba_equipos/validation.php';
 include '../config/db.php';
 header('Content-Type: application/json');
 
-$input = json_decode(file_get_contents("php://input"), true);
+$input = json_decode(file_get_contents("php://input"), true) ?? [];
+// sanea campos esperados
+$input['accion'] = sanear_str($input['accion'] ?? null);
+$input['id'] = to_int_or_null($input['id'] ?? null);
+$input['nombre_pc'] = sanear_str($input['nombre_pc'] ?? null);
+
 if (!$input || !isset($input['accion'])) {
     echo json_encode(["status" => "error", "mensaje" => "Solicitud inválida"]);
     exit;

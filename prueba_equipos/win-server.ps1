@@ -212,6 +212,7 @@ function Start-WebSocketProcess {
                             accion = "getRegistro"
                             origen = "equipo"
                             nombre_equipo = $Config.IdEquipo
+                            mac_address = $SharedState.MacAddress
                         }
                         if ($registrado) {
                             Write-WSLog "📝 Cliente registrado: $($Config.IdEquipo)" -Tipo Success

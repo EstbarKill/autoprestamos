@@ -28,65 +28,76 @@ window.conectarWS = async function () {
     // Obtener sede seleccionada desde localStorage
     const sedeGuardada = localStorage.getItem("sede_seleccionada");
     if (!sedeGuardada) {
-      mostrarToast('⚠️ Debes seleccionar un punto de servicio en el desplegable antes de conectar');
+      mostrarToast(
+        "⚠️ Debes seleccionar un punto de servicio en el desplegable antes de conectar"
+      );
       return false;
     }
 
     // Mapear ID de sede a nombre
     const sedeNombres = {
-      "1": "Biblioteca Central José Martí Sede 1",      
-      "2": "Hemeroteca Ana Bolivar de Consuegra",
-      "3": "Biblioteca de Posgrado (Barranquilla)"
+      1: "Biblioteca Central José Martí Sede 1",
+      2: "Hemeroteca Ana Bolivar de Consuegra",
+      3: "Biblioteca de Posgrado (Barranquilla)",
     };
     const sedeNombre = sedeNombres[sedeGuardada] || `Sede ${sedeGuardada}`;
 
     return await new Promise((resolve) => {
       ws = new WebSocket("ws://localhost:8081");
 
-      ws.onopen = async () => {
-        // Reseteamos flags de reconexión al abrir correctamente
-        try {
-          window.reconnectAttempts = 0;
-          window.reconnecting = false;
-          window.manualDisconnect = false;
-        } catch (e) {}
-        // Verificar nuevamente el estado del servidor al abrir el socket
-        try {
-          const estado = await verificarServidor();
-          if (!estado || (estado.status && estado.status !== 'corriendo')) {
-            console.warn('Servidor WS no activo en onopen, cerrando socket. Estado:', estado);
-            mostrarToast('⚠️ El servidor WebSocket no parece estar activo tras abrir conexión', 'warning');
-            try { ws.close(); } catch (e) {}
+ws.onopen = async () => {
+    // Reset de flags de reconexión
+    window.reconnectAttempts = 0;
+    window.reconnecting = false;
+    window.manualDisconnect = false;
+
+    // Verificar servidor en onopen
+    try {
+        const estado = await verificarServidor();
+        if (!estado || (estado.status && estado.status !== "corriendo")) {
+            mostrarToast("⚠️ El servidor WebSocket no está activo", "warning");
+            ws.close();
             resolve(false);
             return;
-          }
-        } catch (e) {
-          console.error('Error verificando servidor en onopen:', e);
-          mostrarToast('⚠️ No se pudo verificar el estado del servidor tras abrir conexión', 'warning');
-          try { ws.close(); } catch (err) {}
-          resolve(false);
-          return;
         }
+    } catch (e) {
+        mostrarToast("⚠️ Error verificando servidor", "warning");
+        ws.close();
+        resolve(false);
+        return;
+    }
 
-        // Registrar dashboard usando la sede seleccionada del desplegable
-        btn.textContent = "Desconectar";
-        btn.classList.remove("btn-outline-danger", "btn-warning");
-        btn.classList.add("btn-success");
-        if (dot) dot.style.background = "green";
-        mostrarToast("🟢 Conectado al servidor WebSocket");
+    // Cambiar UI a "Conectado"
+    btn.textContent = "Desconectar";
+    btn.classList.remove("btn-outline-danger", "btn-warning");
+    btn.classList.add("btn-success");
+    if (dot) dot.style.background = "green";
+    mostrarToast("🟢 Conectado al servidor WebSocket");
 
-        ws.send(
-          JSON.stringify({
-            tipo: "registro",
-            origen: "dashboard",
-            nombre_equipo: "Admin_" + sedeNombre,
-            id_p_servicio: parseInt(sedeGuardada),
-            nombre_p_servicio: sedeNombre,
-          })
-        );
+    // ================================
+    // 🔑 CORRECCIÓN CRÍTICA DEL TOKEN
+    // ================================
+// Obtener token previamente generado
+const token = localStorage.getItem("autoprestamos_jwt_token");
 
-        resolve(true);
-      };
+if (!token || token === "null") {
+    mostrarToast("❌ No hay token registrado en localStorage", "danger");
+    return;
+}
+
+ws.send(JSON.stringify({
+    tipo: "registro",
+    origen: "dashboard",
+    nombre_equipo: "Admin_" + sedeNombre,
+    id_p_servicio: parseInt(sedeGuardada),
+    nombre_p_servicio: sedeNombre,
+    token: token
+}));
+
+
+    resolve(true);
+};
+
 
       ws.onmessage = (event) => {
         try {
@@ -105,11 +116,17 @@ window.conectarWS = async function () {
               break;
             case "comando":
               // Registrar ejecución de comandos en el log; evitar toast por cada comando
-              agregarLog(`⚙️ Comando '${data.accion}' ejecutado en ${data.nombre_pc}`, "info");
+              agregarLog(
+                `⚙️ Comando '${data.accion}' ejecutado en ${data.nombre_pc}`,
+                "info"
+              );
               break;
             case "equipo_desconectado":
               // Registrar en log; si es necesario, dashboard puede mostrar resumen
-              agregarLog(`🔌 Equipo desconectado: ${data.nombre_pc}`, "warning");
+              agregarLog(
+                `🔌 Equipo desconectado: ${data.nombre_pc}`,
+                "warning"
+              );
               break;
             case "confirmacion":
               nombre_eq = data.nombre_eq;
@@ -118,18 +135,31 @@ window.conectarWS = async function () {
               origen = data.origen;
               if (origen == "server") {
                 // Confirmaciones desde el servidor: mostrar toast para acciones críticas
-                if (data.accion === 'finalizar' || data.accion === 'bloquear') {
-                  mostrarToast(`✅ ${data.nombre_eq}: ${data.accion} => ${data.resultado}`, "success");
+                if (data.accion === "finalizar" || data.accion === "bloquear") {
+                  mostrarToast(
+                    `✅ ${data.nombre_eq}: ${data.accion} => ${data.resultado}`,
+                    "success"
+                  );
                 }
-                agregarLog(`Confirmación: ${data.nombre_eq} ${data.accion} ${data.resultado}`, "success");
+                agregarLog(
+                  `Confirmación: ${data.nombre_eq} ${data.accion} ${data.resultado}`,
+                  "success"
+                );
                 console.log("✅ Confirmación recibida:", data);
                 // refrescar estado
-                ws.send(JSON.stringify({ tipo: "actualizar", origen: "dashboard" }));
+                ws.send(
+                  JSON.stringify({ tipo: "actualizar", origen: "dashboard" })
+                );
               } else if (origen == "equipo") {
                 // Confirmaciones desde equipo: loguear y refrescar, sin toast
-                agregarLog(`Confirmación desde equipo: ${data.nombre_eq} ${data.accion} ${data.resultado}`, "success");
+                agregarLog(
+                  `Confirmación desde equipo: ${data.nombre_eq} ${data.accion} ${data.resultado}`,
+                  "success"
+                );
                 console.log("✅ Confirmación desde equipo recibida:", data);
-                ws.send(JSON.stringify({ tipo: "actualizar", origen: "dashboard" }));
+                ws.send(
+                  JSON.stringify({ tipo: "actualizar", origen: "dashboard" })
+                );
               }
               break;
             case "error":
@@ -149,7 +179,7 @@ window.conectarWS = async function () {
               const estadoNuevo = data.estado_nuevo || "Desconocido";
               const nombreEquipo = data.nombre_equipo || "Equipo desconocido";
               const razon = data.razon ? ` (${data.razon})` : "";
-              
+
               // Mostrar toast según el nuevo estado
               let tipoToast = "info";
               let icono = "ℹ️";
@@ -160,11 +190,17 @@ window.conectarWS = async function () {
                 tipoToast = "danger";
                 icono = "⛔";
               }
-              
+
               // Cambio de estado visible: toast y log
-              mostrarToast(`${icono} ${nombreEquipo} → ${estadoNuevo}${razon}`, tipoToast);
-              agregarLog(`${icono} ${nombreEquipo} cambió a estado: ${estadoNuevo}${razon}`, tipoToast === 'danger' ? 'error' : 'warning');
-              
+              mostrarToast(
+                `${icono} ${nombreEquipo} → ${estadoNuevo}${razon}`,
+                tipoToast
+              );
+              agregarLog(
+                `${icono} ${nombreEquipo} cambió a estado: ${estadoNuevo}${razon}`,
+                tipoToast === "danger" ? "error" : "warning"
+              );
+
               // Refrescar tabla de sesiones
               ws.send(
                 JSON.stringify({
@@ -196,7 +232,9 @@ window.conectarWS = async function () {
 
         // Si la desconexión fue solicitada manualmente por el admin, no reconectar
         if (window.manualDisconnect) {
-          console.log("ℹ️ Conexión WebSocket cerrada por solicitud manual. No se reconecta.");
+          console.log(
+            "ℹ️ Conexión WebSocket cerrada por solicitud manual. No se reconecta."
+          );
           window.reconnecting = false;
           return;
         }
@@ -209,24 +247,42 @@ window.conectarWS = async function () {
           window.reconnectAttempts = (window.reconnectAttempts || 0) + 1;
           const attempt = window.reconnectAttempts;
           if (attempt > window.MAX_RECONNECT) {
-            console.warn(`🔴 No fue posible reconectar después de ${window.MAX_RECONNECT} intentos.`);
-            mostrarToast(`🔴 No se pudo reconectar al servidor después de ${window.MAX_RECONNECT} intentos`, 'danger');
+            console.warn(
+              `🔴 No fue posible reconectar después de ${window.MAX_RECONNECT} intentos.`
+            );
+            mostrarToast(
+              `🔴 No se pudo reconectar al servidor después de ${window.MAX_RECONNECT} intentos`,
+              "danger"
+            );
             window.reconnecting = false;
-            try { if (typeof mostrarDesconectado === 'function') mostrarDesconectado(); } catch(e){}
+            try {
+              if (typeof mostrarDesconectado === "function")
+                mostrarDesconectado();
+            } catch (e) {}
             return;
           }
 
           const delay = window.RECONNECT_BASE_DELAY * attempt; // backoff lineal
           // Registrar intento en log en lugar de mostrar toast cada vez
-          console.log(`🔁 Intento de reconexión ${attempt}/${window.MAX_RECONNECT} en ${delay/1000}s...`);
-          agregarLog(`🔁 Intento de reconexión ${attempt}/${window.MAX_RECONNECT}`, 'warning');
+          console.log(
+            `🔁 Intento de reconexión ${attempt}/${window.MAX_RECONNECT} en ${
+              delay / 1000
+            }s...`
+          );
+          agregarLog(
+            `🔁 Intento de reconexión ${attempt}/${window.MAX_RECONNECT}`,
+            "warning"
+          );
 
           setTimeout(async () => {
             try {
               const ok = await conectarWS();
               if (ok) {
-                mostrarToast(`🟢 Reconectado correctamente en el intento ${attempt}`,'success');
-                agregarLog(`🟢 Reconectado en intento ${attempt}`,'success');
+                mostrarToast(
+                  `🟢 Reconectado correctamente en el intento ${attempt}`,
+                  "success"
+                );
+                agregarLog(`🟢 Reconectado en intento ${attempt}`, "success");
                 window.reconnecting = false;
                 window.reconnectAttempts = 0;
                 return;
@@ -236,7 +292,7 @@ window.conectarWS = async function () {
                 attemptReconnect();
               }
             } catch (err) {
-              console.error('Error en intento de reconexión:', err);
+              console.error("Error en intento de reconexión:", err);
               attemptReconnect();
             }
           }, delay);

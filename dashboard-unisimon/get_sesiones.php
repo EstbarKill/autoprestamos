@@ -1,5 +1,6 @@
 <?php
 include '../config/db.php';
+require_once __DIR__ . '/../prueba_equipos/validation.php';
 header('Content-Type: application/json');
 
 // Obtener parámetro de filtro por punto de servicio

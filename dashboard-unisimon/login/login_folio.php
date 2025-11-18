@@ -2,7 +2,10 @@
 // =====================================
 // 🔐 LOGIN FOLIO - VALIDACIÓN STAFF
 // =====================================
-include '../../prueba_equipos/tokenByron.php';
+
+require_once __DIR__ . '/ratelimit.php';
+require_once __DIR__ . '/token.php';
+
 header('Content-Type: application/json');
 session_start();
 
@@ -15,14 +18,22 @@ $input = json_decode(file_get_contents("php://input"), true);
 $username = trim($input['username'] ?? '');
 $password = trim($input['password'] ?? '');
 
+// Validar inputs
 if (!$username || !$password) {
     http_response_code(400);
     echo json_encode(["status" => "error", "message" => "Faltan credenciales"]);
     exit;
 }
 
+// Rate limiting
+if (!ratelimit_check($_SERVER['REMOTE_ADDR'], 30, 60)) {
+   http_response_code(429);
+   echo json_encode(['status'=>'error','mensaje'=>'Too many requests']);
+   exit;
+}
+
 // === LOGIN EN FOLIO ===
-$loginUrl = "$url/authn/login";
+$loginUrl = "$folioUrl/authn/login";
 $headers = [
     "Content-Type: application/json",
     "Accept: application/json",
@@ -67,7 +78,7 @@ if (!$token || $httpCode !== 201) {
 }
 
 // === Obtener info del usuario ===
-$userInfoUrl = "$url/users?query=username==$username";
+$userInfoUrl = "$folioUrl/users?query=username==$username";
 $headers = [
     "X-Okapi-Tenant: $tenant",
     "X-Okapi-Token: $token",
@@ -111,8 +122,13 @@ $_SESSION['folio_user'] = [
     'is_staff' => $isStaff
 ];
 
+// === Generar token JWT para el dashboard ===
+$jwt = generarTokenDashboard($username, "dashboard");
+
 echo json_encode([
-    "status" => "ok",
+    "status"  => "ok",
     "message" => "Login exitoso",
-    "user" => $_SESSION['folio_user']
+    "token"   => $jwt,
+    "user"    => $_SESSION['folio_user']
 ]);
+exit;

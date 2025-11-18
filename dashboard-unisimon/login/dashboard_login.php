@@ -33,7 +33,11 @@
       const data = await resp.json();
       if (data.status === 'ok') {
         msg.textContent = "✅ Acceso concedido, redirigiendo...";
-        setTimeout(() => window.location.href = "index.html", 1200);
+        localStorage.setItem('autoprestamos_jwt_token', data.token);
+localStorage.setItem('autosede', data.sede);
+localStorage.setItem('autouser', data.username);
+
+setTimeout(() => window.location.href = "index.html", 1200);
       } else {
         msg.textContent = "❌ " + data.message;
       }
