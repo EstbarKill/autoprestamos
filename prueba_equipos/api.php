@@ -34,6 +34,7 @@ $empezar = $input['empezar'] ?? $_POST['empezar']   ?? null;
 $tipo = $input['tipo'] ?? $_POST['tipo']   ?? null;
 $user_comando  = $input['user_comando'] ?? $_POST['user_comando'] ?? null;
 $accion = $input['accion'] ?? $_POST['accion'] ?? null;
+$estado_comando = $input['estado_comando'] ?? null;
 $origen = $input['origen'] ?? $_POST['origen'] ?? null;
 $timestamp = $input['timestamp_hibernacion'] ?? $_POST['timestamp'] ?? null;
 
@@ -51,9 +52,9 @@ $manualblock = folioManualBlock($userId, $token);
 $autoblock   = folioAutoBlock($userId, $token);
 
 if (!ratelimit_check($_SERVER['REMOTE_ADDR'], 30, 60)) {
-   http_response_code(429);
-   echo json_encode(['status'=>'error','mensaje'=>'Too many requests']);
-   exit;
+    http_response_code(429);
+    echo json_encode(['status' => 'error', 'mensaje' => 'Too many requests']);
+    exit;
 }
 
 if (!empty($manualblock) || !empty($autoblock)) {
@@ -101,7 +102,7 @@ if ($loanAbierto) {
 
 $last = getUltimaSesion($conn, $userId, $id_equipo);
 $now  = new DateTime('now', new DateTimeZone('America/Bogota'));
-$estado = intval($last['id_estado_fk'] ?? null);
+$estado = intval($last['id_estado_fk'] ?? $input['estado'] ?? null);
 $fechaProg = isset($last['fecha_final_programada']) ? new DateTime($last['fecha_final_programada'], new DateTimeZone('America/Bogota')) : null;
 
 switch ($tipo) {
@@ -221,30 +222,29 @@ switch ($tipo) {
                         }
                         break;
                     case ESTADO_HIBERNANDO:
-    // Calcula cuándo debe terminar la hibernación
-    $inicioHibernacion = isset($last['fecha_final_programada'])
-        ? new DateTime($last['fecha_final_programada'], new DateTimeZone('America/Bogota'))
-        : $now;
-    $finHibernacion = clone $inicioHibernacion;
-    $finHibernacion->modify('+10 minutes'); // o el tiempo máximo que definas
+                        // Calcula cuándo debe terminar la hibernación
+                        $inicioHibernacion = isset($last['fecha_final_programada'])
+                            ? new DateTime($last['fecha_final_programada'], new DateTimeZone('America/Bogota'))
+                            : $now;
+                        $finHibernacion = clone $inicioHibernacion;
+                        $finHibernacion->modify('+10 minutes'); // o el tiempo máximo que definas
 
-    if ($now >= $finHibernacion) {
-        actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
-        $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-        jsonOk([
-            "estado" => "Finalizado",
-            "mensaje" => "Sesión finalizada automáticamente tras hibernación prolongada"
-        ]);
-        exit;
-    } else {
-        jsonOk([
-            "estado" => "Hibernando",
-            "mensaje" => "Sesión en modo hibernación (inactiva temporalmente)"
-        ]);
-        exit;
-    }
-    break;
-
+                        if ($now >= $finHibernacion) {
+                            actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
+                            $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
+                            jsonOk([
+                                "estado" => "Finalizado",
+                                "mensaje" => "Sesión finalizada automáticamente tras hibernación prolongada"
+                            ]);
+                            exit;
+                        } else {
+                            jsonOk([
+                                "estado" => "Hibernando",
+                                "mensaje" => "Sesión en modo hibernación (inactiva temporalmente)"
+                            ]);
+                            exit;
+                        }
+                        break;
                     default:
                         jsonOk(["estado" => "Error", "mensaje" => "Flujo no reconocido en estado Suspendido"]);
                         exit;
@@ -253,6 +253,47 @@ switch ($tipo) {
                 $checkout_resp = folioCheckout($token, $folio_item_barcode, $userBarcode, $servicePointId);
                 $sesion_id = crearSesion($conn, $userId, $username_full, $id_equipo, $intervaloTiempo);
                 jsonOk(["estado" => "Abierto", "mensaje" => "Sesión iniciada correctamente"]);
+            }
+            // ================== ACCIONES DIRECTAS ==================
+            if ($accion) {
+                if ($estado_comando["true"]) {
+                switch ($accion) {
+                    case 'finalizar':
+                        actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
+                        $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
+
+                        jsonOk([
+                            "estado" => "Finalizado",
+                            "accion" => "ejecutada",
+                            "mensaje" => "Sesión finalizada inmediatamente"
+                        ]);
+                        exit;
+
+                    case 'suspender':
+                        actualizarEstado($conn, $last['id'], ESTADO_SUSPENDIDO, $now->format('Y-m-d H:i:s'));
+
+                        jsonOk([
+                            "estado" => "Suspendido",
+                            "accion" => "ejecutada",
+                            "mensaje" => "Sesión suspendida inmediatamente"
+                        ]);
+                        exit;
+
+                    case 'renovar':
+                        actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
+                        $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
+
+                        $sesion_id = crearSesion($conn, $userId, $username_full, $id_equipo, $intervaloTiempo);
+                        $checkoutResp = folioCheckout($token, $folio_item_barcode, $userBarcode, $servicePointId);
+
+                        jsonOk([
+                            "estado" => "Renovado",
+                            "accion" => "ejecutada",
+                            "mensaje" => "Sesión renovada correctamente"
+                        ]);
+                        exit;
+                }
+            }
             }
         }
         break;
@@ -366,34 +407,34 @@ switch ($tipo) {
                         ]);
                     }
                     break;
-case 'hibernar':
-    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
-    if ($ultimaSesion) {
-        actualizarEstado($conn, $ultimaSesion['id'], ESTADO_HIBERNANDO, $now->format('Y-m-d H:i:s'));
-        jsonOk([
-            "estado"  => "Hibernando_comando",
-            "mensaje" => "Sesión puesta en modo hibernación por inactividad.",
-            "timestamp_hibernacion"=> $timestamp
-        ]);
-    } else {
-        jsonOk(["estado" => "Error", "mensaje" => "No se encontró sesión activa para hibernar."]);
-    }
-    break;
+                case 'hibernar':
+                    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
+                    if ($ultimaSesion) {
+                        actualizarEstado($conn, $ultimaSesion['id'], ESTADO_HIBERNANDO, $now->format('Y-m-d H:i:s'));
+                        jsonOk([
+                            "estado"  => "Hibernando_comando",
+                            "mensaje" => "Sesión puesta en modo hibernación por inactividad.",
+                            "timestamp_hibernacion" => $timestamp
+                        ]);
+                    } else {
+                        jsonOk(["estado" => "Error", "mensaje" => "No se encontró sesión activa para hibernar."]);
+                    }
+                    break;
 
-case 'finalizar_por_hibernacion':
-    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
-    if ($ultimaSesion) {
-        actualizarEstado($conn, $ultimaSesion['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
-        $checkinResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-        jsonOk([
-            "estado"  => "Finalizado_comando",
-            "mensaje" => "Sesión finalizada automáticamente por hibernación prolongada.",
-            "timestamp_hibernacion"=> $timestamp
-        ]);
-    } else {
-        jsonOk(["estado" => "Error", "mensaje" => "No se encontró sesión para finalizar por hibernación."]);
-    }
-    break;
+                case 'finalizar_por_hibernacion':
+                    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
+                    if ($ultimaSesion) {
+                        actualizarEstado($conn, $ultimaSesion['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
+                        $checkinResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
+                        jsonOk([
+                            "estado"  => "Finalizado_comando",
+                            "mensaje" => "Sesión finalizada automáticamente por hibernación prolongada.",
+                            "timestamp_hibernacion" => $timestamp
+                        ]);
+                    } else {
+                        jsonOk(["estado" => "Error", "mensaje" => "No se encontró sesión para finalizar por hibernación."]);
+                    }
+                    break;
 
                 // ------------------------------------------------------------
                 // ❓ Acción desconocida
@@ -408,7 +449,7 @@ case 'finalizar_por_hibernacion':
 
             break; // Fin del case comando_api
         } else if ($origen == "equipo") {
-            
+
             // ============================================================
             // 🧠 Validaciones iniciales
             // ============================================================

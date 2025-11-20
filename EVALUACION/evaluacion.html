@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Evaluación del Servicio - Biblioteca USB</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Poppins', sans-serif;
+    background: linear-gradient(135deg,#0078D7,#00A4EF);
+    margin: 0;
+    height: 100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .container {
+    width: 96%;
+    max-width: 920px;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(2,20,50,0.25);
+    padding: 26px;
+    overflow:auto;
+    max-height: 92vh;
+  }
+
+  header {
+    display:flex;
+    align-items:center;
+    gap:16px;
+    margin-bottom: 8px;
+  }
+  .brand {
+    width:56px;height:56px;border-radius:10px;background:linear-gradient(180deg,#fff, #f2f7ff);
+    display:flex;align-items:center;justify-content:center;border:1px solid rgba(0,0,0,0.03);
+    font-weight:700;color:#0078D7;font-size:20px;
+  }
+  header h1 { margin:0;font-size:20px;color:#0b3b66; }
+  header p { margin:0;color:#5b738f;font-size:13px; }
+
+  form { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
+
+  .full { grid-column: 1 / -1; }
+  label { display:block; font-weight:600; color:#304156; margin-bottom:6px; font-size:14px; }
+  select, textarea, input[type="text"] {
+    width:100%;
+    padding:10px 12px;
+    border-radius:8px;
+    border:1px solid #d0d7e2;
+    font-size:14px;
+    transition: box-shadow .15s, border-color .15s;
+    background:#fff;
+  }
+  select:focus, textarea:focus, input:focus {
+    outline:none;
+    border-color:#0078D7;
+    box-shadow:0 4px 18px rgba(0,120,215,0.12);
+  }
+  textarea { min-height:110px; resize:vertical; }
+
+  .actions { display:flex; gap:12px; margin-top:12px; grid-column: 1 / -1; }
+  button.primary {
+    background:#0078D7; color:#fff; border:none; padding:12px 18px; border-radius:10px; font-weight:700; cursor:pointer;
+    transition: background .15s, transform .08s;
+  }
+  button.primary:disabled { opacity:0.6; cursor:not-allowed; transform:none; }
+  button.primary:hover:not(:disabled){ background:#005fa3; transform: translateY(-2px); }
+
+  .note { color:#6b7a90; font-size:13px; margin-top:8px; grid-column: 1 / -1; }
+
+  footer { text-align:center; font-size:13px; color:#7b8aa3; margin-top:14px; grid-column: 1 / -1; }
+
+  /* modal */
+  .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.45); z-index:9999; }
+  .modal.show { display:flex; }
+  .modal-card { background:#fff; padding:26px 28px; border-radius:12px; box-shadow:0 8px 30px rgba(2,20,50,0.35); text-align:center; width:90%; max-width:420px; }
+  .modal-card h2 { margin:0 0 8px; color:#0078D7; }
+  .modal-card p { margin:0;color:#48607a; }
+
+  @media (max-width:820px){
+    form { grid-template-columns: 1fr; padding-bottom:10px; }
+  }
+</style>
+</head>
+<body>
+  <div class="container" role="main">
+    <header>
+      <div class="brand">USB</div>
+      <div>
+        <h1>Evaluación del Servicio</h1>
+        <p>Bibliotecas Universidad Simón Bolívar — Por favor complete el formulario</p>
+      </div>
+    </header>
+
+    <form id="formulario" class="survey" autocomplete="off" novalidate>
+      <!-- FILA 1 -->
+      <div>
+        <label for="vinculacion">Vinculación con la Universidad</label>
+        <select id="vinculacion" name="vinculacion" required>
+          <option value="">Selecciona una opción</option>
+          <option>Estudiante de Pregrado</option>
+          <option>Estudiante de Posgrado</option>
+          <option>Egresado</option>
+          <option>Profesor</option>
+          <option>Visitante</option>
+          <option>Administrativo</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="programa">Programa académico al que pertenece</label>
+        <select id="programa" name="programa" required>
+          <option value="">Selecciona una opción</option>
+          <option>Administración de empresas</option>
+          <option>Comercio y Negocios Internacionales</option>
+          <option>Contaduría Pública</option>
+          <option>Derecho</option>
+          <option>Diseño Industrial</option>
+          <option>Enfermería</option>
+          <option>Fisioterapia</option>
+          <option>Ingeniería Biomédica</option>
+          <option>Ingeniería de Datos e Inteligencia Artificial</option>
+          <option>Ingeniería Civil</option>
+          <option>Ingeniería de Mercados</option>
+          <option>Ingeniería de Sistemas</option>
+          <option>Ingeniería Industrial</option>
+          <option>Ingeniería Mecánica</option>
+          <option>Ingeniería Mecatrónica</option>
+          <option>Ingeniería Multimedia</option>
+          <option>Instrumentación Quirúrgica</option>
+          <option>Matemáticas y Ciencias de la Computación</option>
+          <option>Medicina</option>
+          <option>Microbiología</option>
+          <option>Nutrición y Dietética</option>
+          <option>Psicología</option>
+          <option>Química y Farmacia</option>
+          <option>Técnica Profesional en Operación Portuaria (por ciclos propedéutico)</option>
+          <option>Trabajo Social</option>
+          <option>Especialización en Gerencia social</option>
+          <option>Especialización en Gerencia e innovación</option>
+          <option>Especialización en Gobiernos y asuntos públicos</option>
+          <option>Especialización en Logística y negocios internacional</option>
+          <option>Especialización en Tributación</option>
+          <option>Especialización en Derecho Laboral y Seguridad Social</option>
+          <option>Especialización en Derecho Administrativo</option>
+          <option>Especialización en Procesos de Intervención Social</option>
+          <option>Especialización en Criminología y Psicología Forense Aplicada</option>
+          <option>Especialización en Derecho Constitucional</option>
+          <option>Especialización en Psicología Clínica</option>
+          <option>Especialización en Adicciones</option>
+          <option>Especialización en Derecho Probatorio</option>
+          <option>Especialización en Métodos de Gestión y Resolución de Conflictos</option>
+          <option>Maestría en Administración de Empresas e Innovación</option>
+          <option>Maestría en Auditoría y Sistemas de la Calidad en Servicios de Salud</option>
+          <option>Maestría en Desarrollo y Gestión de Empresas Sociales</option>
+          <option>Maestría en Educación</option>
+          <option>Maestría en Derecho Administrativo</option>
+          <option>Maestría en Familias</option>
+          <option>Maestría en Derecho Penal</option>
+          <option>Maestría en Derecho Procesal</option>
+          <option>Maestría en Psicología</option>
+          <option>Maestría en Ciencia de Datos</option>
+          <option>Marketing y negocios internacionales</option>
+          <option>Doctorado en Ciencias de la Educación</option>
+        </select>
+      </div>
+
+      <!-- FILA 2 -->
+      <div>
+        <label for="dependencia">Dependencia a la que pertenece</label>
+        <select id="dependencia" name="dependencia" required>
+          <option value="">Selecciona una opción</option>
+          <option>Vicerrectoría Académica</option>
+          <option>Vicerrectoría Administrativa</option>
+          <option>Vicerrectoría Financiera</option>
+          <option>Vicerrectoría Infraestructura</option>
+          <option>Vicerrectoría Investigación e Innovación</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="biblioteca">Biblioteca a evaluar</label>
+        <select id="biblioteca" name="biblioteca" required>
+          <option value="">Selecciona una opción</option>
+          <option>Biblioteca Central José Martí</option>
+          <option>Hemeroteca Ana Bolívar de Consuegra</option>
+          <option>Biblioteca de Posgrado Ana Bolívar de Consuegra</option>
+          <option>Biblioteca Anita Bolívar de Consuegra</option>
+        </select>
+      </div>
+
+      <!-- FILA 3 -->
+      <div>
+        <label for="espacio">Los espacios colaborativos y de investigación en la hemeroteca son:</label>
+        <select id="espacio" name="espacio" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="horario">Horario de atención</label>
+        <select id="horario" name="horario" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <!-- FILA 4 -->
+      <div>
+        <label for="atencion">La atención del personal es:</label>
+        <select id="atencion" name="atencion" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="tiempo">Considera que el tiempo de atención en la prestación de los servicios es:</label>
+        <select id="tiempo" name="tiempo" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <!-- FILA 5 -->
+      <div>
+        <label for="iluminacion">Iluminación</label>
+        <select id="iluminacion" name="iluminacion" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="ventilacion">Ventilación</label>
+        <select id="ventilacion" name="ventilacion" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <!-- FILA 6 -->
+      <div>
+        <label for="discapacidad">Facilidad de acceso para personas con discapacidad</label>
+        <select id="discapacidad" name="discapacidad" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="satisfaccion">¿Cómo calificaría la atención recibida? (Satisfacción)</label>
+        <select id="satisfaccion" name="satisfaccion" required>
+          <option value="">Selecciona una opción</option>
+          <option value="1">Deficiente</option>
+          <option value="2">Aceptable</option>
+          <option value="3">Regular</option>
+          <option value="4">Bueno</option>
+          <option value="5">Muy bueno</option>
+        </select>
+      </div>
+
+      <!-- FILA 7 - Observaciones (full width) -->
+      <div class="full">
+        <label for="observacion">Observaciones y/o recomendaciones</label>
+        <textarea id="observacion" name="observacion" placeholder="Escribe aquí tus observaciones..." ></textarea>
+      </div>
+
+      <!-- Acciones -->
+      <div class="actions full">
+        <button type="submit" class="primary" id="submitBtn">Enviar evaluación</button>
+      </div>
+
+      <div class="note full">
+        * Todos los campos marcados son obligatorios. Su respuesta será anónima y se usará solo para mejorar los servicios.
+      </div>
+
+      <footer class="full">Gracias por ayudarnos a mejorar 💙</footer>
+    </form>
+  </div>
+
+  <!-- Modal de gracias -->
+  <div class="modal" id="modalGracias" role="dialog" aria-hidden="true">
+    <div class="modal-card" role="document" aria-labelledby="modalTitle">
+      <h2 id="modalTitle">¡Gracias por tu evaluación!</h2>
+      <p>Los datos se guardaron correctamente. La sesión finalizará en breve.</p>
+    </div>
+  </div>
+
+<script>
+/* ======================
+   Comportamiento del formulario
+   ====================== */
+
+const form = document.getElementById('formulario');
+const submitBtn = document.getElementById('submitBtn');
+const modal = document.getElementById('modalGracias');
+
+// Solicitar pantalla completa al cargar (si el navegador lo permite)
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.documentElement;
+  if (el.requestFullscreen) {
+    // Intenta solicitar fullscreen (funciona mejor si la ventana fue creada por script)
+    try { el.requestFullscreen().catch(()=>{}); } catch(e){}
+  }
+});
+
+// Evitar cierre accidental con mensaje nativo
+window.onbeforeunload = () => "¿Seguro que deseas salir sin enviar la evaluación?";
+
+// Validación simple: activar/desactivar botón si faltan campos requeridos
+function checkRequired() {
+  const required = form.querySelectorAll('[required]');
+  for (const field of required) {
+    if (!field.value || field.value.trim() === '') return false;
+  }
+  return true;
+}
+form.addEventListener('input', () => submitBtn.disabled = !checkRequired());
+submitBtn.disabled = !checkRequired();
+
+// Envío via fetch a archivo PHP local (guardar en CSV/XLSX desde el servidor)
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!checkRequired()) return;
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Enviando...';
+
+  // recopilar datos
+  const data = new FormData(form);
+
+  try {
+    const resp = await fetch('guardar.php', { method: 'POST', body: data });
+    const text = await resp.text();
+    // se espera que guardar.php responda "ok" cuando todo esté bien
+    if (text && text.trim().toLowerCase() === 'ok') {
+      // mostrar modal de gracias
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden','false');
+
+      // esperar un momento para que el usuario vea el mensaje
+      setTimeout(() => {
+        // intentar salir de pantalla completa y cerrar la ventana
+        try { if (document.exitFullscreen) document.exitFullscreen(); } catch(e){}
+        try { window.close(); } catch(e){}
+      }, 2200);
+    } else {
+      alert('Error al guardar la respuesta. Intente de nuevo.');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Enviar evaluación';
+    }
+  } catch (err) {
+    console.error(err);
+    alert('Error de conexión al guardar. Reintente.');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Enviar evaluación';
+  }
+});
+</script>
+</body>
+</html>

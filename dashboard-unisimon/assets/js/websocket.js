@@ -18,11 +18,6 @@ window.conectarWS = async function () {
     return true;
   }
 
-  const servidorActivo = await verificarServidor();
-  if (!servidorActivo) {
-    mostrarToast("⚠️ Servidor WebSocket apagado");
-    return false;
-  }
 
   try {
     // Obtener sede seleccionada desde localStorage
@@ -78,11 +73,10 @@ ws.onopen = async () => {
     // 🔑 CORRECCIÓN CRÍTICA DEL TOKEN
     // ================================
 // Obtener token previamente generado
-const token = localStorage.getItem("autoprestamos_jwt_token");
-
-if (!token || token === "null") {
-    mostrarToast("❌ No hay token registrado en localStorage", "danger");
-    return;
+let token = localStorage.getItem("autoprestamos_jwt_token");
+if (!token) {
+    console.warn("⚠️ No hay token de dashboard, servidor generará uno.");
+    token = null;
 }
 
 ws.send(JSON.stringify({
@@ -93,12 +87,8 @@ ws.send(JSON.stringify({
     nombre_p_servicio: sedeNombre,
     token: token
 }));
-
-
     resolve(true);
 };
-
-
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -120,6 +110,25 @@ ws.send(JSON.stringify({
                 `⚙️ Comando '${data.accion}' ejecutado en ${data.nombre_pc}`,
                 "info"
               );
+              break;
+            case "confirmacion_registro":
+              if (data.registro === "dashboard") {
+                // Registro del dashboard: mostrar toast
+                mostrarToast(
+                  `✅ Registro exitoso del dashboard: ${data.nombre_eq}`,
+                  "success"
+                );
+              }else if (data.registro === "equipo") {
+                // Registro de equipo: mostrar toast
+                mostrarToast(
+                  `✅ Registro exitoso del equipo: ${data.nombre_eq}`,
+                  "success"
+                );
+              }
+              // Registrar en log; no mostrar toast para registro automático
+              agregarLog(`✅ Registro exitoso: ${data.nombre_eq}`, "success");
+              localStorage.setItem("autoprestamos_jwt_token", data.token);
+              console.log("🔐 Nuevo token guardado:", data.token);
               break;
             case "equipo_desconectado":
               // Registrar en log; si es necesario, dashboard puede mostrar resumen
@@ -209,6 +218,17 @@ ws.send(JSON.stringify({
                 })
               );
               break;
+            case "control_server":
+                mostrarToast("🔄 Comandos enviado", "warning");
+                agregarLog("🔄 Comando de control del servidor recibido", "info");
+                break;
+            case "equipo_conectado":
+                agregarLog(`🖥️ Nuevo equipo conectado: ${data.nombre_pc}`, "info");
+                break;
+            case "confirmacion_comando":
+                agregarLog(`✅ Comando '${data.accion}' confirmado por ${data.nombre_pc}`, "success");
+                mostrarToast(`✅ Comando '${data.accion}' confirmado por ${data.nombre_pc}`, "success");
+                break;
             default:
               console.log("📡 Mensaje no manejado:", data);
           }

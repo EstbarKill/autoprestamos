@@ -48,14 +48,21 @@ if ($socket) {
 }
 
 // 🚀 3️⃣ Intentar iniciar el servidor en segundo plano
-$command = 'start "" /B php "' . __DIR__ . '\\server.php"';
+$command = 'powershell -command "Start-Process php -ArgumentList ' . "'" . __DIR__ . '\\server.php' . "'" . ' -WindowStyle Hidden"';
 logToFile("🚀 Ejecutando: $command");
+logToFile("ANTES exec...");
 exec($command);
-usleep(800000); // 0.8 segundos para dar tiempo a levantar
+logToFile("DESPUES exec...");
+usleep(900000); // 0.9s
+
 
 // 🔍 4️⃣ Buscar PID con respaldo doble (wmic y tasklist)
-exec('wmic process where "commandline like \'%server.php%\'" get processid 2>nul', $out);
-$pid = '';
+exec('powershell -command "Get-CimInstance Win32_Process |
+    Where-Object { $_.CommandLine -like \'*server.php*\' } |
+    Select-Object -ExpandProperty ProcessId"', $out);
+
+$pid = trim($out[0] ?? '');
+
 foreach ($out as $line) {
     if (preg_match('/\d+/', $line, $m)) {
         $pid = $m[0];

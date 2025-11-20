@@ -31,13 +31,13 @@ $Global:SharedState = [hashtable]::Synchronized(@{
     MacAddress              = $null
     SessionActive           = $true
     WSClientReference       = $null
-    LastActivity            = (Get-Date)
-    IsHibernating           = $false
-    HibernationStartTime    = $null
     OutgoingQueue           = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
     OutgoingSignal          = [System.Threading.AutoResetEvent]::new($false)
-    INACTIVITY_TIMEOUT      = 15    # segundos hasta entrar en hibernación (actual: 30s)
-    HIBERNATION_MAX_DURATION= 20    # segundos en hibernación hasta finalizar (actual: 60s)
+    # Timeouts / Durations (valores por defecto razonables)
+INACTIVITY_TIMEOUT = 600 # segundos de inactividad antes de hibernar (10 min)
+HIBERNATION_MAX_DURATION = 300 # segundos max en hibernación antes de finalizar (5 min)
+IsHibernating = $false
+HibernationStartTime = $null
 })
 
 # ============================================================
@@ -146,7 +146,6 @@ function Get-ActiveNetworkInterface {
 # ============================================================
 $Global:WebSocketRunspace = $null
 $Global:WebSocketPowerShell = $null
-
 function Start-WebSocketProcess {
     Write-Log "🔄 Iniciando proceso WebSocket independiente..." -Tipo Info
 
@@ -246,6 +245,14 @@ function Start-WebSocketProcess {
             while ($WsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open -and $SharedState.SessionActive) {
                 # Procesar cola de mensajes salientes (si existen)
                 try {
+                        $destino = $data.destino_equipo
+    if ($null -ne $destino -and $destino -ne 'todos') {
+        # comparar con el identificador del equipo (Config.IdEquipo) y con nombre del host esperado
+        if (($destino -ne $Config.IdEquipo) -and ($destino -ne $SharedState.NombreEquipo) -and ($destino -ne $env:COMPUTERNAME)) {
+            Write-WSLog "🔇 Mensaje destinado a $destino — no es este equipo ($($Config.IdEquipo)). Ignorando." -Tipo Info
+            continue
+        }
+    }
                     while ($SharedState.ContainsKey('OutgoingQueue') -and $SharedState.OutgoingQueue.Count -gt 0) {
                         $out = $SharedState.OutgoingQueue.Dequeue()
                         Send-WSMessage -WsClient $WsClient -Payload $out | Out-Null
@@ -414,11 +421,10 @@ function Invoke-AccionControl {
         }
         "finalizar" {
             Write-Log "⛔ Iniciando flujo FINALIZAR (API -> UI -> CONFIRM)" -Tipo Info
-            $apiResp = Invoke-ApiCall -ExtraBody @{ accion = 'finalizar'; corr = $Detalles.corr }
+            $apiResp = Invoke-ApiCall -ExtraBody @{estado_comando = 'true'; accion = 'finalizar'; corr = $Detalles.corr }
             if ($null -eq $apiResp -or $apiResp.estado -eq 'Error') {
                 Write-Log "❌ API fallo al finalizar: $($apiResp.mensaje)" -Tipo Error
                 Send-Confirmacion -Resultado "error" -Mensaje ("API error: " + ($apiResp.mensaje -as [string]))
-                break
             }
             if ($apiResp.estado -match 'FINALIZADO' -or $apiResp.estado -match 'OK') {
                 [System.Windows.Forms.MessageBox]::Show("Su sesión fue finalizada. Gracias.","Finalizado",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information)
@@ -491,29 +497,49 @@ function Start-CommandQueueMonitor {
     $timer.Interval = 300
     $timer.Add_Tick({
         try {
-            while ($Global:SharedState.CommandQueue.Count -gt 0) {
-                try {
-                    $comando = $Global:SharedState.CommandQueue.Dequeue()
-                    if ($comando -is [PSCustomObject]) { $comando = ConvertTo-Hashtable $comando }
-                    if ($comando.tipo -eq "control_server") {
-                        switch ($comando.manejo) {
-                            "comandos" {
-                                $detalles = ConvertTo-Hashtable $comando
-                                Invoke-AccionControl -Accion $comando.accion -Detalles $detalles
-                            }
-                            "mensaje" {
-                                Invoke-AccionControl -Accion "mensaje" -Detalles @{ texto = $comando.texto }
-                            }
-                            "info" {
-                                Invoke-AccionControl -Accion "ver_info" -Detalles @{}
-                            }
-                            default {
-                                Write-Log "⚠️ Comando desconocido: $($comando.tipo)" -Tipo Warning
-                            }
-                        }
-                    }
-                } catch { Write-Log "❌ Error procesando comando: $_" -Tipo Error }
+while ($Global:SharedState.CommandQueue.Count -gt 0) {
+    try {
+        $comando = $Global:SharedState.CommandQueue.Dequeue()
+        if ($comando -is [PSCustomObject]) { 
+            $comando = ConvertTo-Hashtable $comando 
+        }
+        
+        # ⚡ FORMATO NUEVO DEL SERVER.PHP (manejo = comandos)
+        if ($comando.tipo -eq "control_server") {
+            if ($comando.destino -eq "shell") {
+            switch ($comando.manejo) {
+                "comandos" {
+                    $detalles = ConvertTo-Hashtable $comando
+                    Invoke-AccionControl -Accion $comando.accion -Detalles $detalles
+                }
+                "mensaje" {
+                    Invoke-AccionControl -Accion "mensaje" -Detalles @{ texto = $comando.texto }
+                }
+                "info" {
+                    Invoke-AccionControl -Accion "ver_info"
+                }
+                default {
+                    Write-Log "⚠️ Manejo desconocido: $($comando.manejo)" -Tipo Warning
+                }
             }
+            break
+        }
+
+        # 🧩 SOPORTE LEGACY
+        if ($comando.tipo -eq "control_server") {
+            $detalles = ConvertTo-Hashtable $comando
+            Invoke-AccionControl -Accion $comando.accion -Detalles $detalles
+            continue
+        }
+
+        Write-Log "⚠️ Comando no reconocido: $($comando.tipo)" -Tipo Warning
+    }
+}
+    catch {
+        Write-Log "❌ Error procesando comando: $_" -Tipo Error
+    }
+}
+
         } catch { }
     })
     $timer.Start()
@@ -529,6 +555,7 @@ function Invoke-ApiCall {
         username    = $Global:Config.Username
         mac_address = $Global:SharedState.MacAddress
         origen      = "equipo"
+        destino     = "server"
         tipo        = "control"
     } + $ExtraBody
 
@@ -996,16 +1023,42 @@ try {
     $initialized = Initialize-System
     if (-not $initialized) { Write-Log "Fallo en la inicialización. Abortando..." -Tipo Error; exit 1 }
 
-    Start-SessionLoop
+    # ============================================================
+    # 📝 PRE-EVALUACIÓN DEL SERVICIO (KIOSK) - SIN VALIDACIÓN
+    # ============================================================
+
+    Write-Log "Iniciando evaluación previa al inicio de sesión..." -Tipo Info
+
+    $KioskBat = "C:\xampp\htdocs\autoprestamos\EVALUACION\run_kiosk.bat"
+
+    if (!(Test-Path $KioskBat)) {
+        Write-Log "❌ No se encontró run_kiosk.bat en: $KioskBat" -Tipo Error
+        Start-SessionLoop
+        return
+    }
+
+    Write-Log "Ejecutando Evaluación Kiosk..." -Tipo Info
+
+    try {
+        $proc = Start-Process -FilePath $KioskBat -WindowStyle Hidden -PassThru
+        $proc.WaitForExit()
+
+        Write-Log "✔ Chrome cerrado. Continuando con el flujo de sesión..." -Tipo Success
+
+        Start-SessionLoop
+    }
+    catch {
+        Write-Log "⚠️ Error ejecutando evaluación: $_" -Tipo Warning
+        Start-SessionLoop
+    }
 
     Write-Log "✅ Ejecución completada exitosamente" -Tipo Success
-} catch {
+}
+catch {
     Write-Log "❌ Error crítico: $($_.Exception.Message)" -Tipo Error
     Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Tipo Error
-} finally {
-    # Limpieza final por si acaso
-    Clear-Resources
 }
+
 # ============================================================
 # FIN - v2.3
 # ============================================================

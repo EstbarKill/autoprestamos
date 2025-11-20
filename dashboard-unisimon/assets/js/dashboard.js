@@ -9,6 +9,7 @@ let conectado_server = false;
 let sesiones = [];
 let sedeSeleccionada = null; // Almacenar sede seleccionada
 let estadoFiltroSeleccionado = null; // Almacenar filtro de estado seleccionado
+let cambioSedeEnProgreso = false;
 // Sistema de toasts en cola FIFO
 window.toastQueue = [];
 window.MAX_TOASTS_VISIBLE = 5;
@@ -85,7 +86,6 @@ async function conectarD() {
   }
 }
 
-
 // 🔴 FUNCIÓN CORREGIDA - Desconectar
 function desconectar() {
   // Sólo preguntar confirmación si hay conexión abierta
@@ -93,7 +93,43 @@ function desconectar() {
     mostrarToast("⚠️ No hay conexión WebSocket activa");
     return;
   }
+  if ($cambioSedeEnProgreso) {
+    console.log("🔄 Cambio de sede: desconectando sin confirmación...")
+        try {
+      // Marcar como desconexión manual para evitar reintentos
+      try { window.manualDisconnect = true; window.reconnecting = false; } catch(e){}
 
+      ws.close();
+      console.log("🔌 Reconectando...");
+      conectado = false;
+      // Limpiar flag de conexión en localStorage
+      localStorage.setItem("dashboard_conectado", "false");
+
+      // Limpiar caché de sesiones y mostrar vista desconectada
+      try {
+        sesiones = [];
+      } catch (e) {
+        console.warn('No se pudo vaciar sesiones:', e);
+      }
+      // Mostrar la vista de servidor desconectado y limpiar la tabla
+      try {
+        mostrarDesconectado();
+      } catch (e) {
+        console.warn('mostrarDesconectado no disponible:', e);
+      }
+
+      // Actualizar UI
+      const btn = document.querySelector("#toggleBtn");
+      const dot = document.querySelector("#statusDot");
+      btn.textContent = "Conectar";
+      btn.classList.remove("btn-success");
+      btn.classList.add("btn-outline-danger");
+      if (dot) dot.style.background = "#d00";
+    } catch (err) {
+      console.error("Error al cerrar WebSocket:", err);
+      mostrarToast("❌ Error al desconectar WebSocket");
+    }
+  }else {
   if (confirm("⚠️ ¿Deseas desconectar del servidor WebSocket?")) {
     try {
       // Marcar como desconexión manual para evitar reintentos
@@ -131,6 +167,7 @@ function desconectar() {
     }
   }
 }
+}
 
 async function verificarServidor() {
   try {
@@ -144,7 +181,8 @@ async function verificarServidor() {
     btn.classList.remove("btn-primary", "btn-warning");
     btn.classList.add("btn-success");
     // Registrar en log en lugar de toast informativo para evitar ruido
-    try { agregarLog("🟢 " + data.mensaje, 'info'); } catch(e) { console.log(data.mensaje); }
+    try {
+      agregarLog("🟢 " + data.mensaje, 'info'); } catch(e) { console.log(data.mensaje); }
     conectado_server = true;
     } else if (data.status === "detenido") {
       mostrarDesconectado();
@@ -288,12 +326,37 @@ function actualizarDatos() {
 }
 
 async function manejoServidor() {
-  if (conectado_server) {
-    detenerServidor();
-  } else {
-    iniciarServidor();
+  try {
+    // Esperar la respuesta real
+    const server = await verificarServidor();
+
+    console.log("Respuesta servidor:", server);
+
+    // Validar que sí haya respuesta
+    if (!server || !server.status) {
+      console.warn("⚠ No se obtuvo respuesta válida del servidor.");
+      return;
+    }
+
+    const estado = server.status;
+    console.log("Estado servidor:", estado);
+
+    // Si el servidor NO está corriendo -> iniciarlo
+    if (estado === "detenido" || estado === "error" || estado === "apagado") {
+      await iniciarServidor();
+    }
+
+    // Si está activo -> permitir detenerlo
+    if (estado === "ya_corriendo" || estado === "iniciado" || estado === "corriendo") {
+      await detenerServidor();
+    }
+
+    console.log("Manejo servidor ejecutado");
+  } catch (e) {
+    console.error("❌ Error en manejoServidor():", e);
   }
 }
+
 
 // 🟢 Iniciar o apagar servidor según estado actual
 function iniciarServidor() {
@@ -306,7 +369,6 @@ function iniciarServidor() {
   fetch("../servers/iniciar_server.php")
     .then((res) => res.text())
     .then((data) => {
-      console.log("Respuesta cruda al iniciar:", data);
       const responseData = JSON.parse(data);
       if (responseData.status === "iniciado") {
         mostrarToast("🚀 " + responseData.mensaje);
@@ -349,7 +411,6 @@ function detenerServidor() {
   fetch("../servers/detener_server.php")
     .then((res) => res.text())
     .then((data) => {
-      console.log("Respuesta cruda al detener:", data);
       const responseData = JSON.parse(data);
       if (responseData.status === "detenido") {
         mostrarToast("🔴 " + responseData.mensaje);
@@ -389,7 +450,7 @@ async function actualizarTabla(sesiones) {
       return;
     } else {
       // fallback HTTP - solo si WS no está disponible
-      fetchEstado();
+      fetchEstado(sedeSeleccionada);
     }
   }
 
@@ -595,9 +656,9 @@ function cambiarSede() {
   // Si ya estamos conectados via WebSocket, aplicar el filtro al instante
   try {
     if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-      console.log('WebSocket abierto: aplicando filtro de sede inmediatamente');
-      // Llamada asíncrona; no bloqueamos el hilo UI
-      aplicarFiltroSede().catch(err => console.error('Error aplicando filtro al cambiar sede:', err));
+      console.log('WebSocket abierto: aplicando filtro de sede inmediatamente al cambiar sede y reconectando...');
+      desconectar($cambioSedeEnProgreso = true); // Desconectar para reiniciar con nueva sede
+      conectarD(); // Reconectar con la nueva sede
     }
   } catch (err) {
     console.warn('⚠️ Error comprobando estado de WebSocket al cambiar sede:', err);
@@ -621,8 +682,7 @@ async function aplicarFiltroSede() {
     const data = await res.json();
     if (Array.isArray(data)) {
       console.log(`📥 Sesiones cargadas para sede ${sedeId}:`, data.length);
-      sesiones = data; // Actualizar caché global
-      actualizarTabla(sesiones);
+      sesiones = data; // Actualizar caché global;
       mostrarToast(`Sesiones filtradas por sede: ${sedeId}`);
     } else {
       console.warn('Respuesta no es array:', data);
@@ -665,6 +725,8 @@ function accionSesion(id, accion) {
       nombre_eq: nombre_pc,
       id_eq: id, // nombre del equipo o ID
       origen: "dashboard",
+      destino: "server",
+      corr: Date.now(),
       id_p_servicio: sedeSeleccionada ? parseInt(sedeSeleccionada) : null,
       timestamp: new Date().toISOString(),
     };
@@ -679,47 +741,6 @@ function accionSesion(id, accion) {
     console.error("❌ WebSocket no disponible para enviar comando");
     mostrarToast("⚠️ WebSocket desconectado - Comando no enviado", "warning");
   }
-  /** 
-    // 🟢 2️⃣ Luego actualizar base de datos (para persistencia)
-    console.log(`💾 Registrando acción en BD: ${accion} para sesión ${id}`);
-    fetch("./dashboard_action.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accion, id })
-    })
-    .then(res => {
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-        return res.json();
-    })
-    .then(data => {
-        console.log("✅ Respuesta BD:", data);
-        if (data.status === "ok") {
-            mostrarToast(`✅ ${data.mensaje}`, "success");
-            
-            // 🟢 3️⃣ Actualizar interfaz después de 1 segundo
-            setTimeout(() => {
-                console.log("🔄 Actualizando interfaz...");
-                if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({
-                      tipo: "actualizar",
-                      origen: "dashboard"
-                    }));
-                    console.log("📡 Solicitando actualización via WS");
-                } else {
-                    fetchEstado();
-                }
-            }, 1000);
-        } else {
-            console.error("❌ Error en BD:", data.mensaje);
-            mostrarToast(`❌ Error: ${data.mensaje}`, "danger");
-        }
-    })
-    .catch(err => {
-        console.error("❌ Error al registrar acción:", err);
-        mostrarToast("❌ Error al registrar acción en BD", "danger");
-    });*/
 }
 
 function guardarConfig() {
@@ -794,6 +815,7 @@ async function enviarMensaje() {
       JSON.stringify({
         tipo: "comando",
         origen: "dashboard",
+        destino: "server",
         accion: "mensaje",
         mensaje: texto,
         destino: nombrePC,
@@ -801,7 +823,7 @@ async function enviarMensaje() {
       })
     );
 
-    mostrarToast(`📨 Mensaje enviado a ${nombrePC} (Sede: ${sedeSeleccionada || 'N/A'})`);
+    mostrarToast(`📨 Mensaje enviado a ${nombrePC} (Sede: ${sedeSeleccionada || 'N/A'}) (Texto: ${texto})`);
     document.getElementById("mensajeTexto").value = "";
   } else {
     mostrarToast("⚠️ No conectado al WS");
@@ -816,6 +838,7 @@ function enviarMensajeATodos() {
       JSON.stringify({
         tipo: "comando",
         origen: "dashboard",
+        destino: "server",
         accion: "mensaje",
         mensaje: texto,
         destino: "todos",
@@ -826,8 +849,6 @@ function enviarMensajeATodos() {
     document.getElementById("mensajeTexto").value = "";
   } else mostrarToast("⚠️ No conectado al WS");
 }
-
-
 
 function mostrarToast(msg, tipo = "info") {
   // Crear elemento toast
@@ -994,7 +1015,7 @@ async function ensureToken() {
     }
 
     try {
-const tokenResponse = await fetch("../prueba_equipos/token.php", {
+const tokenResponse = await fetch("../servers/token.php", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: "sede=" + encodeURIComponent(localStorage.getItem("sede_seleccionada"))
@@ -1056,17 +1077,6 @@ function limpiarLogs() {
     console.error('Error limpiando logs:', err);
     mostrarToast('❌ Error limpiando logs');
   }
-}
-
-// Función de prueba: genera logs de varios tipos en intervalos para verificar FIFO
-function testLogs() {
-  limpiarLogs();
-  const tipos = ['info','success','warning','error','info','success'];
-  tipos.forEach((t, idx) => {
-    setTimeout(() => {
-      agregarLog(`Mensaje de prueba #${idx+1} (tipo: ${t})`, t === 'error' ? 'error' : t === 'success' ? 'success' : t === 'warning' ? 'warning' : 'info');
-    }, idx * 600);
-  });
 }
 
 // Helper debugging function placeholder

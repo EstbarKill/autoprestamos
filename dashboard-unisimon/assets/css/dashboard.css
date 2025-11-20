@@ -135,9 +135,9 @@ body { font-family: "Segoe UI", Tahoma, sans-serif; background-size: cover; back
   margin-bottom: 30vh;
 }
 #main {
-  background-color: rgba(255,255,255,0.9);
-  border-radius: 12px;
-  margin-left: 20px;
+  background-color: rgba(255, 255, 255, 0.473);
+  border-radius: 10px;
+  margin: 25px;
   flex-grow: 1;
   box-shadow: 0 0 15px rgba(0,0,0,0.15);
 }

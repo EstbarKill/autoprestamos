@@ -1,0 +1,11 @@
+{
+    "pid": "15672022312",
+    "token": "bef67dbe5ea5f653",
+    "inicio": "2025-11-20 14:48:28",
+    "ip": "192.168.56.1",
+    "estado": "cerrado",
+    "puerto": 8081,
+    "ruta": "C:\\xampp\\htdocs\\autoprestamos\\servers\\server.php",
+    "fin": "2025-11-20 15:22:34",
+    "duracion_segundos": 2046
+}
