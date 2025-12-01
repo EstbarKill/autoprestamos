@@ -1,0 +1,23 @@
+<?php
+// config.php.dist - PLANTILLA PARA CONFIGURACIÓN
+// Copiar como config.php y completar con datos reales
+
+return [
+    'folio' => [
+        'username' => 'tu_usuario@unisimon.edu.co',
+        'password' => 'tu_password_seguro',
+        'tenant' => 'fs00001168',
+        'base_url' => 'https://okapi-unisimonbolivar.folio.ebsco.com'
+    ],
+    'clave_admin' => 'cambiar_esta_clave',
+    'database' => [
+        'host' => 'localhost',
+        'user' => 'usuario_db',
+        'pass' => 'password_db',
+        'name' => 'autoprestamo'
+    ],
+    'timezone' => 'America/Bogota'
+];
+?>
+
+

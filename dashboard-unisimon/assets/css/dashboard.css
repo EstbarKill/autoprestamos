@@ -1,0 +1,363 @@
+:root {
+  --verde: #1b6b2a;
+  --dorado: #cfae4a;
+  --blanco: #ffffff;
+}
+body { font-family: "Segoe UI", Tahoma, sans-serif; background-size: cover; background-color: var(--bg); margin:0; }
+#sidebar { width: 260px; min-height:100vh; background: linear-gradient(180deg,var(--verde), #0f4f1b); color:var(--blanco); }
+.logo { width: 96px; height:auto; border-radius:8px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
+.menu button { background: rgba(255,255,255,0.08); color:var(--blanco); border: none; transition: .18s; }
+.menu button:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.12); }
+.table-success { background: rgba(27,107,42,0.95); color: white; }
+.tabla-container { background: rgba(255,255,255,0.95); padding:15px; border-radius:10px; }
+.toast-message { position: fixed; right: 20px; bottom: 845px; background: rgba(0, 0, 0, 0.95); color: white; padding:10px 14px; border-radius:8px; box-shadow:0 8px 20px rgba(0,0,0,0.12); z-index:9999; }
+.pagina { display:none; }
+.pagina.visible { display:block; animation: fadeIn .28s ease; }
+@keyframes fadeIn { from {opacity:0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+
+/* ============================================ */
+/* 📋 SECCIÓN DE LOGS EN TIEMPO REAL */
+/* ============================================ */
+
+#logContainer {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) rgba(0, 0, 0, 0.3);
+}
+
+#logContainer::-webkit-scrollbar {
+  width: 6px;
+}
+
+#logContainer::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+}
+
+#logContainer::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+#logContainer::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Entradas de log individuales */
+.log-entry {
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  border-left: 3px solid;
+  background: rgba(255, 255, 255, 0.05);
+  word-wrap: break-word;
+  animation: slideIn 0.3s ease-out;
+}
+
+.log-entry.log-success {
+  border-left-color: #28a745;
+  background: rgba(40, 167, 69, 0.1);
+}
+
+.log-entry.log-info {
+  border-left-color: #17a2b8;
+  background: rgba(23, 162, 184, 0.1);
+}
+
+.log-entry.log-warning {
+  border-left-color: #ffc107;
+  background: rgba(255, 193, 7, 0.1);
+}
+
+.log-entry.log-danger {
+  border-left-color: #dc3545;
+  background: rgba(220, 53, 69, 0.1);
+}
+
+.log-entry .log-time {
+  color: #000000;
+  font-size: 0.8rem;
+  margin-right: 6px;
+}
+
+.log-entry .log-message {
+  color: #0f8d19;
+  font-size: 0.9rem;
+}
+
+/* Animación de entrada */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Equipos conectados */
+#equiposConectados .badge {
+  font-size: 0.7rem;
+  padding: 4px 8px;
+  animation: fadeIn 0.4s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Botón limpiar logs */
+.btn-outline-light:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+#stats{
+  width: fit-content;
+  height: fit-content;
+  font-size: 2vh;
+}
+#sidebar .logo {
+  width: 90px;
+  border-radius: 50%;
+  background-color: white;
+  padding: 5px;
+}
+.mt-auto{
+  margin-bottom: 30vh;
+}
+#main {
+  background-color: rgba(255,255,255,0.9);
+  border-radius: 12px;
+  margin-left: 20px;
+  flex-grow: 1;
+  box-shadow: 0 0 15px rgba(0,0,0,0.15);
+}
+
+.table-container {
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: white;
+}
+
+.toast-message {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  background: #0e581e;
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 12px;
+  box-shadow: 0 0 10px rgba(168, 240, 150, 0.74);
+  font-weight: 500;
+  z-index: 9999;
+  opacity: 0.95;
+  font-size: 14px;
+  min-width: 300px;
+  max-width: 400px;
+  word-wrap: break-word;
+  transition: all 0.3s ease-out;
+  animation: toastSlideIn 0.3s ease-out forwards;
+}
+
+/* Variantes de tipo de toast */
+.toast-message.toast-success {
+  background: #0e581e;
+  border-left: 4px solid #28a745;
+}
+
+.toast-message.toast-info {
+  background: #003d82;
+  border-left: 4px solid #17a2b8;
+}
+
+.toast-message.toast-warning {
+  background: #664d03;
+  border-left: 4px solid #ffc107;
+}
+
+.toast-message.toast-danger,
+.toast-message.toast-error {
+  background: #5a1f1f;
+  border-left: 4px solid #dc3545;
+}
+
+/* Animación de entrada */
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(400px) translateY(20px);
+  }
+  to {
+    opacity: 0.95;
+    transform: translateX(0) translateY(0);
+  }
+}
+
+/* Animación de salida */
+.toast-message.toast-exit {
+  animation: toastSlideOut 0.3s ease-in forwards;
+}
+
+@keyframes toastSlideOut {
+  from {
+    opacity: 0.95;
+    transform: translateX(0) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(400px) translateY(20px);
+  }
+}
+
+.monitor-box {
+  background: rgba(45, 163, 75, 0.815);
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 0.9em;
+}
+/* Estilos para la sección "Circulación" */
+#circulacion {
+    margin-top: 20px;
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+#circulacion h3 {
+    font-size: 20px;
+    color: #007bff;
+}
+
+#logsCirculacion {
+    font-family: monospace;
+    background-color: #212529;
+    color: #fff;
+    padding: 10px;
+    border-radius: 4px;
+    height: 200px;
+    overflow-y: scroll;
+    white-space: pre-wrap;  /* Para que los saltos de línea sean respetados */
+}
+/* Estilo adicional para hacer el modal más atractivo */
+#modalInfo .modal-dialog {
+    max-width: 90%;
+    margin: 30px auto;
+}
+
+#modalInfo .modal-body {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+#modalInfo .col-md-6 {
+    border-left: 1px solid #ccc;
+    padding-left: 20px;
+}
+
+/* Monitor de estado de servicios*/
+.monitor-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background 0.3s ease;
+}
+
+.monitor-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.monitor-status {
+  font-weight: bold;
+}
+
+.monitor-status.online {
+  color: #00ff7f;
+  animation: pulseGreen 1.2s infinite;
+}
+
+.monitor-status.offline {
+  color: #ff4c4c;
+  animation: pulseRed 1.2s infinite;
+}
+
+@keyframes pulseGreen {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+@keyframes pulseRed {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeout {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translateY(20px); }
+}
+
+.pagina {
+  display: none;
+  animation: fadein 0.4s ease-in-out;
+}
+
+.pagina.visible {
+  display: block;
+}
+  /* === TOPBAR === */
+#topbar {
+  background-color: #fff;
+  border-bottom: 3px solid #006b3f;
+  position: sticky;
+  top: 0;
+  z-index: 999;
+}
+.solicitudes-box {
+    margin-top: 15px;
+    padding: 12px;
+    background: #ffffff;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+}
+
+#tablaSolicitudes {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#tablaSolicitudes th, #tablaSolicitudes td {
+    padding: 8px;
+    border-bottom: 1px solid #e2e2e2;
+}
+
+.btn-accion {
+    padding: 4px 8px;
+    font-size: 12px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.btn-aceptar { background: #28a745; color: white; }
+.btn-rechazar { background: #dc3545; color: white; }

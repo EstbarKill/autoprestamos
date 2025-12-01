@@ -1,0 +1,1299 @@
+# ============================================================
+# 🎓 SISTEMA DE AUTOPRÉSTAMOS - ARQUITECTURA DUAL PROCESS
+# ============================================================
+# Versión: 2.2 (Depuración Completa - Error .Text Resuelto)
+# ============================================================
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# ============================================================
+# 📦 CONFIGURACIÓN GLOBAL
+# ============================================================
+
+$Global:Config = @{
+    ServidorWS    = "ws://localhost:8081"
+    ApiUrl        = "http://localhost/autoprestamos/prueba_equipos/api.php"
+    LogoPath      = "C:\xampp\htdocs\autoprestamos\dashboard-unisimon\assets\img\logo.png"
+    IdEquipo      = $env:COMPUTERNAME
+    Username      = $env:USERNAME
+    ClaveAdmin    = "S1m0n_2025"
+    MaxReintentos = 5
+    TiempoReintento = 3
+    TiempoSuspension = 30
+}
+
+# Variables de sincronización entre procesos
+$Global:SharedState = [hashtable]::Synchronized(@{
+    WebSocketConnected = $false
+    LastMessage = $null
+    CommandQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+    LogQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+    MacAddress = $null
+    SessionActive = $true
+    WSClientReference = $null  # Referencia thread-safe al cliente WS
+    LastActivity = (Get-Date)  # Último timestamp de actividad del usuario
+    IsHibernating = $false     # Flag de hibernación actual
+    HibernationStartTime = $null  # Cuándo comenzó la hibernación
+    OutgoingQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+    INACTIVITY_TIMEOUT = 300   # 5 minutos en segundos
+    HIBERNATION_MAX_DURATION = 600  # 10 minutos adicionales en segundos
+})
+
+# ============================================================
+# 🔍 FUNCIONES DE UTILIDAD
+# ============================================================
+
+function Write-Log {
+    param(
+        [string]$Mensaje,
+        [ValidateSet('Info', 'Warning', 'Error', 'Success')]
+        [string]$Tipo = 'Info'
+    )
+    
+    $timestamp = Get-Date -Format 'HH:mm:ss'
+    $prefijo = switch ($Tipo) {
+        'Info'    { "ℹ️" }
+        'Warning' { "⚠️" }
+        'Error'   { "❌" }
+        'Success' { "✅" }
+    }
+    
+    $color = switch ($Tipo) {
+        'Info'    { 'White' }
+        'Warning' { 'Yellow' }
+        'Error'   { 'Red' }
+        'Success' { 'Green' }
+    }
+    
+    try {
+        Write-Host "[$timestamp] $prefijo [$Tipo] $Mensaje" -ForegroundColor $color
+    }
+    catch {
+        # Silenciar errores de logging para no romper el script
+    }
+}
+
+function Enqueue-WSMessage {
+    param([hashtable]$Payload)
+    try {
+        if (-not $Global:SharedState.ContainsKey('OutgoingQueue')) {
+            $Global:SharedState.OutgoingQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+        }
+        $Global:SharedState.OutgoingQueue.Enqueue($Payload)
+        return $true
+    }
+    catch {
+        Write-Log "⚠️ Error encolar mensaje WS: $_" -Tipo Warning
+        return $false
+    }
+}
+
+function Format-TimeSpan {
+    param([int]$Segundos)
+    $ts = [TimeSpan]::FromSeconds($Segundos)
+    return "{0:00}:{1:00}:{2:00}" -f $ts.Hours, $ts.Minutes, $ts.Seconds
+}
+
+function Convert-ToColombiaDate {
+    param([string]$UtcString)
+    try {
+        $dtUtc = [System.Xml.XmlConvert]::ToDateTime($UtcString, [System.Xml.XmlDateTimeSerializationMode]::Utc)
+        $tzCol = [System.TimeZoneInfo]::FindSystemTimeZoneById("SA Pacific Standard Time")
+        $dtCol = [System.TimeZoneInfo]::ConvertTimeFromUtc($dtUtc, $tzCol)
+        return $dtCol.ToString("dddd, dd 'de' MMMM 'de' yyyy", [System.Globalization.CultureInfo]::GetCultureInfo("es-CO"))
+    }
+    catch {
+        return $UtcString
+    }
+}
+
+function Get-ActiveNetworkInterface {
+    Write-Log "Detectando interfaz de red activa..." -Tipo Info
+    
+    $interfazActiva = Get-NetIPConfiguration |
+        Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" } |
+        Select-Object -First 1
+    
+    if ($interfazActiva) {
+        $mac = $interfazActiva.NetAdapter.MacAddress
+        $nombre = $interfazActiva.NetAdapter.InterfaceAlias
+        $ip = $interfazActiva.IPv4Address.IPAddress
+        
+        Write-Log "Interfaz detectada: $nombre (MAC: $mac)" -Tipo Success
+        return @{ MAC = $mac; Nombre = $nombre; IP = $ip }
+    }
+    
+    Write-Log "No se encontró interfaz con conexión a Internet" -Tipo Error
+    return $null
+}
+
+# ============================================================
+# 🔌 PROCESO WEBSOCKET INDEPENDIENTE (RUNSPACE)
+# ============================================================
+
+$Global:WebSocketRunspace = $null
+$Global:WebSocketPowerShell = $null
+
+function Start-WebSocketProcess {
+    Write-Log "🔄 Iniciando proceso WebSocket independiente..." -Tipo Info
+    
+    # Crear Runspace independiente
+    $Global:WebSocketRunspace = [runspacefactory]::CreateRunspace()
+    $Global:WebSocketRunspace.Open()
+    
+    # Compartir variables globales con el runspace
+    $Global:WebSocketRunspace.SessionStateProxy.SetVariable("Config", $Global:Config)
+    $Global:WebSocketRunspace.SessionStateProxy.SetVariable("SharedState", $Global:SharedState)
+    
+    # Crear PowerShell instance
+    $Global:WebSocketPowerShell = [powershell]::Create()
+    $Global:WebSocketPowerShell.Runspace = $Global:WebSocketRunspace
+    
+    # Script del proceso WebSocket
+    $wsScript = {
+        function Write-WSLog {
+            param([string]$Mensaje, [string]$Tipo = 'Info')
+            $timestamp = Get-Date -Format 'HH:mm:ss'
+            $prefijo = switch ($Tipo) {
+                'Info' { "🌐" }; 'Warning' { "⚠️" }; 'Error' { "❌" }; 'Success' { "✅" }
+            }
+
+            # Procesar logs encolados por el runspace WebSocket
+            try {
+                while ($Global:SharedState.LogQueue.Count -gt 0) {
+                    $logItem = $Global:SharedState.LogQueue.Dequeue()
+                    if ($logItem -is [hashtable]) {
+                        $msg = $logItem.Mensaje
+                        $tipo = if ($logItem.ContainsKey('Tipo')) { $logItem.Tipo } else { 'Info' }
+                    } else {
+                        $msg = $logItem.ToString()
+                        $tipo = 'Info'
+                    }
+                    Write-Log $msg -Tipo $tipo
+                }
+            }
+            catch {
+                # Ignorar errores de logs para no interrumpir el monitor
+            }
+            try {
+                # Mostrar en el runspace (si el host lo permite)
+                Write-Host "[$timestamp] $prefijo [WS-PROCESS] $Mensaje"
+            }
+            catch { }
+
+            # Encolar el log en la cola compartida para que el proceso principal lo muestre
+            try {
+                if (-not $SharedState.ContainsKey('LogQueue')) {
+                    $SharedState.LogQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+                }
+                $SharedState.LogQueue.Enqueue(@{ Mensaje = "[$timestamp] $Mensaje"; Tipo = $Tipo })
+            }
+            catch { }
+        }
+        
+        function Send-WSMessage {
+            param($WsClient, [hashtable]$Payload)
+            
+            if (-not $WsClient -or $WsClient.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
+                return $false
+            }
+            
+            try {
+                $json = $Payload | ConvertTo-Json -Compress
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $segment = [System.ArraySegment[byte]]::new($bytes)
+                $WsClient.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(3000)
+                return $true
+            }
+            catch {
+                Write-WSLog "Error al enviar mensaje: $_" -Tipo Error
+                return $false
+            }
+        }
+        
+        function Connect-WSClient {
+            param([int]$MaxReintentos = 5)
+            
+            $intentos = 0
+            $uri = [System.Uri]$Config.ServidorWS
+            
+            while ($intentos -lt $MaxReintentos -and $SharedState.SessionActive) {
+                try {
+                    Write-WSLog "Conectando a $($Config.ServidorWS) (intento $($intentos + 1)/$MaxReintentos)..." -Tipo Info
+                    
+                    $ws = [System.Net.WebSockets.ClientWebSocket]::new()
+                    $ws.ConnectAsync($uri, [Threading.CancellationToken]::None).Wait()
+                    
+                    if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                        Write-WSLog "✅ Conectado exitosamente" -Tipo Success
+                        
+                        # Registrar cliente
+                        $registrado = Send-WSMessage -WsClient $ws -Payload @{
+                            tipo = "registro"
+                            accion = "getRegistro"
+                            origen = "equipo"
+                            nombre_equipo = $Config.IdEquipo
+                        }
+                        
+                        if ($registrado) {
+                            Write-WSLog "📝 Cliente registrado: $($Config.IdEquipo)" -Tipo Success
+                            $SharedState.WebSocketConnected = $true
+                            $SharedState.WSClientReference = $ws
+                            return $ws
+                        }
+                    }
+                }
+                catch {
+                    Write-WSLog "Error de conexión: $_" -Tipo Error
+                }
+                
+                $intentos++
+                Start-Sleep -Seconds $Config.TiempoReintento
+            }
+            
+            Write-WSLog "❌ No se pudo conectar después de $MaxReintentos intentos" -Tipo Error
+            $SharedState.WebSocketConnected = $false
+            return $null
+        }
+        
+        function Start-WSListener {
+            param($WsClient)
+            
+            Write-WSLog "👂 Iniciando escucha continua de mensajes..." -Tipo Success
+            $buffer = New-Object Byte[] 8192
+            
+            while ($WsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open -and $SharedState.SessionActive) {
+                try {
+                    # Procesar cola de mensajes salientes (si existen)
+                    try {
+                        while ($SharedState.ContainsKey('OutgoingQueue') -and $SharedState.OutgoingQueue.Count -gt 0) {
+                            $out = $SharedState.OutgoingQueue.Dequeue()
+                            Send-WSMessage -WsClient $WsClient -Payload $out | Out-Null
+                        }
+                    }
+                    catch { }
+                    $result = $WsClient.ReceiveAsync([ArraySegment[byte]]$buffer, [Threading.CancellationToken]::None).Result
+                    
+                    if ($result.Count -gt 0) {
+                        $mensaje = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+                        Write-WSLog "📩 Recibido: $mensaje" -Tipo Info
+                        
+                        try {
+                            $data = $mensaje | ConvertFrom-Json
+                            
+                            # Validar origen
+                            if ($data.origen -ne "server") {
+                                Write-WSLog "⛔ Origen no autorizado: $($data.origen)" -Tipo Warning
+                                continue
+                            }
+                            
+                            # Responder a pings inmediatamente (DENTRO DEL RUNSPACE)
+                            if ($data.tipo -eq "ping") {
+                                Send-WSMessage -WsClient $WsClient -Payload @{
+                                    tipo = "pong"
+                                    id = $Config.IdEquipo
+                                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                                } | Out-Null
+                                Write-WSLog "🏓 Pong enviado" -Tipo Info
+                                continue
+                            }
+                            
+                            # Encolar comando para procesamiento
+                            $SharedState.CommandQueue.Enqueue($data)
+                            $SharedState.LastMessage = $mensaje
+                            
+                            Write-WSLog "✅ Encolado: $($data.tipo) - $($data.accion)" -Tipo Success
+                        }
+                        catch {
+                            Write-WSLog "⚠️ Error JSON: $_" -Tipo Warning
+                        }
+                    }
+                }
+                catch {
+                    Write-WSLog "❌ Error escucha: $_" -Tipo Error
+                    break
+                }
+                
+                Start-Sleep -Milliseconds 100
+            }
+            
+            Write-WSLog "⚠️ Listener finalizado. Estado: $($WsClient.State)" -Tipo Warning
+        }
+        
+        # ===== BUCLE PRINCIPAL DEL PROCESO WEBSOCKET =====
+        Write-WSLog "🚀 Proceso WebSocket iniciado" -Tipo Success
+        
+        while ($SharedState.SessionActive) {
+            $ws = Connect-WSClient -MaxReintentos 5
+            
+            if ($ws) {
+                Start-WSListener -WsClient $ws
+                
+                # Cerrar limpiamente
+                try {
+                    if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                        $ws.CloseAsync('NormalClosure', 'Reconexión', [Threading.CancellationToken]::None).Wait(2000)
+                    }
+                    $ws.Dispose()
+                }
+                catch {
+                    Write-WSLog "⚠️ Error al cerrar: $_" -Tipo Warning
+                }
+                
+                $SharedState.WebSocketConnected = $false
+                $SharedState.WSClientReference = $null
+            }
+            
+            if ($SharedState.SessionActive) {
+                Write-WSLog "🔄 Reintentando en 5 segundos..." -Tipo Warning
+                Start-Sleep -Seconds 5
+            }
+        }
+        
+        Write-WSLog "🛑 Proceso WebSocket finalizado" -Tipo Info
+    }
+    
+    # Ejecutar de forma asíncrona
+    $Global:WebSocketPowerShell.AddScript($wsScript) | Out-Null
+    $Global:WebSocketPowerShell.BeginInvoke() | Out-Null
+    
+    Write-Log "✅ Proceso WebSocket iniciado en runspace independiente" -Tipo Success
+}
+
+function Stop-WebSocketProcess {
+    Write-Log "🛑 Deteniendo proceso WebSocket..." -Tipo Warning
+    
+    $Global:SharedState.SessionActive = $false
+    Start-Sleep -Seconds 2
+    
+    if ($Global:WebSocketPowerShell) {
+        try {
+            $Global:WebSocketPowerShell.Stop()
+            $Global:WebSocketPowerShell.Dispose()
+        }
+        catch { }
+    }
+    
+    if ($Global:WebSocketRunspace) {
+        try {
+            $Global:WebSocketRunspace.Close()
+            $Global:WebSocketRunspace.Dispose()
+        }
+        catch { }
+    }
+    
+    Write-Log "✅ Proceso WebSocket detenido" -Tipo Success
+}
+
+# ============================================================
+# 🎮 PROCESADOR DE COMANDOS WEBSOCKET
+# ============================================================
+
+function Invoke-AccionControl {
+    param(
+        [string]$Accion,
+        [hashtable]$Detalles = @{}
+    )
+    
+    Write-Log "🎯 Ejecutando acción: $Accion" -Tipo Info
+    
+    # Función para enviar confirmación
+    function Send-Confirmacion {
+        param([string]$Resultado, [string]$Mensaje)
+        
+        $payload = @{
+            tipo = "confirmacion"
+            origen = "equipo"
+            usuario = $env:USERNAME
+            mac_eq = $Global:SharedState.MacAddress
+            nombre_eq = $Global:Config.IdEquipo
+            accion = $Accion
+            resultado = $Resultado
+            mensaje = $Mensaje
+            timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        }
+        
+        if ($Detalles.corr) {
+            $payload.corr = $Detalles.corr
+        }
+        
+        # Intentar enviar por WebSocket si está disponible
+        try {
+            $wsClient = $Global:SharedState.WSClientReference
+            
+            if ($wsClient -and $wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                $json = $payload | ConvertTo-Json -Compress
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $segment = [System.ArraySegment[byte]]::new($bytes)
+                $wsClient.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(3000)
+                Write-Log "✅ Confirmación enviada" -Tipo Success
+            }
+            else {
+                if ($Detalles.corr) { 
+                    $payload.corr = $Detalles.corr 
+                }
+        catch {
+            Write-Log "⚠️ Error al enviar confirmación: $_" -Tipo Warning
+        }
+    }
+    
+    switch ($Accion) {
+        "bloquear" {
+            Write-Log "🔒 Bloqueando sesion..." -Tipo Warning
+            $apiResp = Invoke-ApiCall -ExtraBody @{ accion = 'bloquear'; corr = $Detalles.corr }
+                        Write-Log "✅ Confirmación encolada para envío" -Tipo Success
+            Start-Sleep -Milliseconds 500
+            
+            try {
+                Write-Log "🔒" -Tipo Warning
+                #shutdown /l /f
+                Send-Confirmacion -Resultado "ejecutado" -Mensaje "Equipo bloqueado exitosamente"
+            }
+            catch {
+                Send-Confirmacion -Resultado "error" -Mensaje "Error al bloquear: $_"
+            }
+        }
+        
+        "suspender" {
+            Write-Log "💤 Suspendiendo equipo..." -Tipo Warning
+            $apiResp = Invoke-ApiCall -ExtraBody @{ accion = 'suspender'; corr = $Detalles.corr }
+            Send-Confirmacion -Resultado "ejecutando" -Mensaje "Preparando suspensión..."
+            
+            try {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "El equipo se suspenderá en 10 segundos.`n¿Desea guardar su trabajo?",
+                    "Suspensión Programada",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                
+                Start-Sleep -Seconds 10
+                Send-Confirmacion -Resultado "ejecutado" -Mensaje "Suspendiendo..."
+            }
+            catch {
+                Send-Confirmacion -Resultado "error" -Mensaje "Error al suspender: $_"
+            }
+        }
+        
+"finalizar" {
+    Write-Log "⛔ Iniciando flujo FINALIZAR (API -> UI -> CONFIRM)" -Tipo Info
+
+    $apiResp = Invoke-ApiCall -ExtraBody @{ accion = 'finalizar'; corr = $Detalles.corr }
+
+    if ($null -eq $apiResp -or $apiResp.estado -eq 'Error') {
+        Write-Log "❌ API fallo al finalizar: $($apiResp.mensaje)" -Tipo Error
+        Send-Confirmacion -Resultado "error" -Mensaje ("API error: " + ($apiResp.mensaje -as [string]))
+        break
+    }
+
+    if ($apiResp.estado -match 'FINALIZADO' -or $apiResp.estado -match 'OK') {
+        [System.Windows.Forms.MessageBox]::Show("Su sesión fue finalizada. Gracias.","Finalizado",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information)
+
+        Send-Confirmacion -Resultado "ejecutado" -Mensaje "Finalizado con check-in en FOLIO"
+        Start-Sleep -Seconds 3
+        #shutdown /l /f
+    } else {
+        Send-Confirmacion -Resultado "error" -Mensaje ("Respuesta API inesperada: " + ($apiResp.mensaje -as [string]))
+    }
+}
+
+        
+        "renovar" {
+            Write-Log "♻️ Sesión renovada" -Tipo Success
+            $apiResp = Invoke-ApiCall -ExtraBody @{ accion = 'renovar'; corr = $Detalles.corr }
+            Send-Confirmacion -Resultado "ejecutado" -Mensaje "Renovación confirmada"
+            
+            try {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "✅ Su sesión ha sido renovada correctamente.",
+                    "Renovación Exitosa"
+                ) | Out-Null
+            }
+            catch { }
+        }
+        
+        "mensaje" {
+            $texto = if ($Detalles.texto) { $Detalles.texto } else { "Mensaje del administrador" }
+            Write-Log "💬 Mostrando mensaje {$texto}" -Tipo Info
+            
+            try {
+                [System.Windows.Forms.MessageBox]::Show(
+                    $texto,
+                    "Notificación del Sistema",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                ) | Out-Null
+                
+                Send-Confirmacion -Resultado "ejecutado" -Mensaje "Mensaje mostrado"
+            }
+            catch {
+                Send-Confirmacion -Resultado "error" -Mensaje "Error al mostrar mensaje"
+            }
+        }
+        
+        "ver_info" {
+            Write-Log "📊 Recopilando información..." -Tipo Info
+            
+            try {
+                $info = @{
+                    usuario = $env:USERNAME
+                    equipo = $env:COMPUTERNAME
+                    ip = (Get-NetIPAddress -AddressFamily IPv4 | 
+                          Where-Object {$_.InterfaceAlias -notmatch "Loopback"} | 
+                          Select-Object -First 1).IPAddress
+                    mac = $Global:SharedState.MacAddress
+                    so = (Get-CimInstance Win32_OperatingSystem).Caption
+                    memoria = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+                    procesador = (Get-CimInstance Win32_Processor).Name
+                }
+                
+                $wsClient = $Global:SharedState.WSClientReference
+                if ($wsClient -and $wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                    $payload = @{
+                        tipo = "info_respuesta"
+                        id = $Global:Config.IdEquipo
+                        datos = $info
+                    } | ConvertTo-Json -Compress
+                    
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+                    $segment = [System.ArraySegment[byte]]::new($bytes)
+                    $wsClient.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(3000)
+                    
+                    Write-Log "✅ Información enviada" -Tipo Success
+                }
+            }
+            catch {
+                Write-Log "❌ Error al recopilar info: $_" -Tipo Error
+                Send-Confirmacion -Resultado "error" -Mensaje "Error al obtener información"
+            }
+        }
+        
+        default {
+            Write-Log "⚠️ Acción desconocida: $Accion" -Tipo Warning
+            Send-Confirmacion -Resultado "desconocida" -Mensaje "Acción no reconocida"
+        }
+    }
+}
+
+# Función auxiliar para convertir PSCustomObject a Hashtable
+function ConvertTo-Hashtable {
+    param([Parameter(ValueFromPipeline)]$InputObject)
+    
+    process {
+        if ($null -eq $InputObject) { return $null }
+        
+        if ($InputObject -is [System.Collections.IDictionary]) {
+            return $InputObject
+        }
+        
+        if ($InputObject -is [PSCustomObject]) {
+            $hash = @{}
+            $InputObject.PSObject.Properties | ForEach-Object {
+                $hash[$_.Name] = if ($_.Value -is [PSCustomObject]) {
+                    ConvertTo-Hashtable $_.Value
+                } else {
+                    $_.Value
+                }
+            }
+            return $hash
+        }
+        
+        return $InputObject
+    }
+}
+
+# Monitor de cola de comandos (Timer en UI thread)
+function Start-CommandQueueMonitor {
+    param($Controles = $null)
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 300
+    
+    $timer.Add_Tick({
+        try {
+            while ($Global:SharedState.CommandQueue.Count -gt 0) {
+                try {
+                    $comando = $Global:SharedState.CommandQueue.Dequeue()
+                    
+                    # Convertir PSCustomObject a Hashtable si es necesario
+                    if ($comando -is [PSCustomObject]) {
+                        $comando = ConvertTo-Hashtable $comando
+                    }
+                    if($comando.tipo -eq "control_server"){
+                    switch ($comando.manejo) {
+                        "comandos"{
+                            # Convertir comando completo a hashtable
+                            $detalles = ConvertTo-Hashtable $comando
+                            Invoke-AccionControl -Accion $comando.accion -Detalles $detalles
+                        }
+                        "mensaje" {
+                         $detalles = ConvertTo-Hashtable $comando
+                         Invoke-AccionControl -Accion "mensaje" -Detalles @{texto = $comando.texto}
+                        }
+                        "info" {
+                            Invoke-AccionControl -Accion "ver_info" -Detalles @{}
+                        }
+                        default {
+                            Write-Log "⚠️ Comando desconocido: $($comando.tipo)" -Tipo Warning
+                        }
+                    }
+                }
+                elseif ($comando.tipo -eq 'cambio_estado') {
+                    try {
+                        # Actualizar UI según cambio de estado (se ejecuta en UI thread)
+                        $nuevo = $comando.estado_nuevo ?? $comando.estado ?? $comando.estadoNuevo
+                        if ($Controles -ne $null -and $Controles.LabelTimer) {
+                            switch ($nuevo.ToLower()) {
+                                'hibernando' { $Controles.LabelTimer.Text = "😴 HIBERNANDO"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Orange; $Global:SharedState.IsHibernating = $true; $Global:SharedState.HibernationStartTime = Get-Date }
+                                'finalizado'  { $Controles.LabelTimer.Text = "⚫ FINALIZADO"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Gray; $Global:SharedState.IsHibernating = $false; $Global:SharedState.HibernationStartTime = $null }
+                                'suspendido'  { $Controles.LabelTimer.Text = "⏸️ SUSPENDIDO"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Orange }
+                                'bloqueado'   { $Controles.LabelTimer.Text = "🔒 BLOQUEADO"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Red }
+                                'abierto'     { $Controles.LabelTimer.Text = "🟢 SESIÓN ACTIVA"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::DarkGreen; $Global:SharedState.IsHibernating = $false; $Global:SharedState.HibernationStartTime = $null }
+                                default       { $Controles.LabelTimer.Text = "ℹ️ Estado: $nuevo"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Black }
+                            }
+                            try { $Controles.Form.Refresh() } catch { }
+                        }
+                    }
+                    catch {
+                        Write-Log "⚠️ Error aplicando cambio_estado en UI: $_" -Tipo Warning
+                    }
+                }
+                }
+                catch {
+                    Write-Log "❌ Error procesando comando: $_" -Tipo Error
+                }
+            }
+        }
+        catch {
+            # Silenciar errores del timer
+        }
+    })
+    
+    $timer.Start()
+    return $timer
+}
+
+# ============================================================
+# 🌐 API REST
+# ============================================================
+
+function Invoke-ApiCall {
+    param([hashtable]$ExtraBody = @{})
+    
+    $body = @{
+        username = $Global:Config.Username
+        mac_address = $Global:SharedState.MacAddress
+        tipo = "control"
+        origen = "equipo"
+    } + $ExtraBody
+    
+    $json = $body | ConvertTo-Json -Compress
+    $headers = @{ "Content-Type" = "application/json" }
+    
+    try {
+        $response = Invoke-RestMethod `
+            -Uri $Global:Config.ApiUrl `
+            -Method Post `
+            -Headers $headers `
+            -Body $json `
+            -TimeoutSec 60
+        
+        return $response
+    }
+    catch {
+        Write-Log "Error API: $($_.Exception.Message)" -Tipo Error
+        return @{ estado = "Error"; mensaje = $_.Exception.Message }
+    }
+}
+
+# ============================================================
+# 🖥️ INTERFAZ GRÁFICA
+# ============================================================
+
+function New-SessionForm {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Gestión de Sesión - AutoPréstamos"
+    $form.Size = [System.Drawing.Size]::new(400, 200)
+    $form.StartPosition = "Manual"
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.ShowInTaskbar = $false
+    $form.MinimizeBox = $true
+    $form.MaximizeBox = $false
+    
+    $form.Location = [System.Drawing.Point]::new(
+        [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width - 400,
+        [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 250
+    )
+    
+    # Logo
+    $logo = New-Object System.Windows.Forms.PictureBox
+    $logo.SizeMode = "StretchImage"
+    $logo.Size = [System.Drawing.Size]::new(80, 80)
+    $logo.Location = [System.Drawing.Point]::new(10, 10)
+    
+    if (Test-Path $Global:Config.LogoPath) {
+        try { 
+            $logo.Image = [System.Drawing.Image]::FromFile($Global:Config.LogoPath) 
+        }
+        catch { }
+    }
+    $form.Controls.Add($logo)
+    
+    # Label Info
+    $labelInfo = New-Object System.Windows.Forms.Label
+    $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI", 12)
+    $labelInfo.Location = [System.Drawing.Point]::new(100, 10)
+    $labelInfo.AutoSize = $true
+    $labelInfo.Text = "Usuario: $($Global:Config.Username)`nMAC: $($Global:SharedState.MacAddress)"
+    $form.Controls.Add($labelInfo)
+    
+    # Label Timer
+    $labelTimer = New-Object System.Windows.Forms.Label
+    $labelTimer.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $labelTimer.Location = [System.Drawing.Point]::new(30, 100)
+    $labelTimer.AutoSize = $true
+    $labelTimer.Text = "Inicializando..."
+    $form.Controls.Add($labelTimer)
+    
+    # Indicador WebSocket
+    $wsIndicator = New-Object System.Windows.Forms.Label
+    $wsIndicator.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+    $wsIndicator.Location = [System.Drawing.Point]::new(10, 150)
+    $wsIndicator.AutoSize = $true
+    $wsIndicator.Text = "WS: Desconectado"
+    $wsIndicator.ForeColor = [System.Drawing.Color]::Red
+    $form.Controls.Add($wsIndicator)
+    
+    # Timer para actualizar indicador WS
+    $wsTimer = New-Object System.Windows.Forms.Timer
+    $wsTimer.Interval = 1000
+    $wsTimer.Add_Tick({
+        try {
+            if ($Global:SharedState.WebSocketConnected) {
+                $wsIndicator.Text = "WS: ✅ Conectado"
+                $wsIndicator.ForeColor = [System.Drawing.Color]::Green
+            } else {
+                $wsIndicator.Text = "WS: ❌ Desconectado"
+                $wsIndicator.ForeColor = [System.Drawing.Color]::Red
+            }
+        }
+        catch { }
+    })
+    $wsTimer.Start()
+    
+    # Botón Minimizar
+    $btnReducir = New-Object System.Windows.Forms.Button
+    $btnReducir.Text = "Minimizar"
+    $btnReducir.Size = [System.Drawing.Size]::new(80, 28)
+    $btnReducir.Location = [System.Drawing.Point]::new($form.Width - 100, $form.Height - 68)
+    $btnReducir.Add_Click({
+        try {
+            if ($form.Height -gt 120) {
+                $form.Size = [System.Drawing.Size]::new(280, 100)
+                $logo.Size = [System.Drawing.Size]::new(170, 60)
+                $btnReducir.Text = "Maximizar"
+            } else {
+                $form.Size = [System.Drawing.Size]::new(400, 200)
+                $logo.Size = [System.Drawing.Size]::new(80, 80)
+                $btnReducir.Text = "Minimizar"
+            }
+            $form.Refresh()
+        }
+        catch { }
+    })
+    $form.Controls.Add($btnReducir)
+    
+    # ========================================
+    # 🖱️ DETECTAR ACTIVIDAD DE USUARIO
+    # ========================================
+    # Cuando hay movimiento del ratón, actualizar LastActivity
+    $form.Add_MouseMove({
+        param($sender, $e)
+        $Global:SharedState.LastActivity = Get-Date
+    })
+    
+    # Cuando se presiona una tecla, actualizar LastActivity
+    $form.Add_KeyDown({
+        param($sender, $e)
+        $Global:SharedState.LastActivity = Get-Date
+    })
+    
+    # Cuando el usuario hace click, actualizar LastActivity
+    $form.Add_MouseDown({
+        param($sender, $e)
+        $Global:SharedState.LastActivity = Get-Date
+    })
+    
+    return @{
+        Form = $form
+        LabelInfo = $labelInfo
+        LabelTimer = $labelTimer
+        WSIndicator = $wsIndicator
+        WSTimer = $wsTimer
+        Logo = $logo
+        BtnReducir = $btnReducir
+    }
+}
+
+# ============================================================
+# 🎮 ESTADOS DE SESIÓN
+# ============================================================
+
+function Invoke-EstadoAbierto {
+    param($Controles, $Response)
+    
+    Write-Log "Estado: ABIERTO" -Tipo Success
+    
+    try {
+        Start-Process -FilePath "explorer.exe" -ErrorAction SilentlyContinue
+    }
+    catch { }
+    
+    try {
+        $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::DarkGreen
+        $tiempo = if ($Response.tiempo_restante) { $Response.tiempo_restante } else { 30 }
+        
+        for ($i = $tiempo; $i -ge 0; $i--) {
+            $Controles.LabelTimer.Text = "🟢 SESIÓN ACTIVA - Restante: $(Format-TimeSpan $i)"
+            $Controles.Form.Refresh()
+            
+            $waitUntil = (Get-Date).AddSeconds(1)
+            while ((Get-Date) -lt $waitUntil) {
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Milliseconds 50
+            }
+        }
+    }
+    catch {
+        Write-Log "Error en countdown: $_" -Tipo Warning
+    }
+    
+    return Invoke-ApiCall
+}
+
+# ============================================================
+# 🎮 OTROS ESTADOS DE SESIÓN
+# ============================================================
+
+function Invoke-EstadoBloqueado {
+    param($Controles, $Response)
+    
+    Write-Log "Estado: BLOQUEADO" -Tipo Error
+    
+    try {
+        $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Red
+        
+        # Verificar check-in de FOLIO
+        if ($Response.folioCheckin -and 
+            $Response.folioCheckin.raw -and 
+            $Response.folioCheckin.raw.loan.status.name -eq "Closed") {
+            
+            Write-Log "Check-in detectado, actualizando estado..." -Tipo Info
+            Start-Sleep -Seconds 1
+            return Invoke-ApiCall
+        }
+        
+        $tiempo = if ($Response.tiempo_restante) { $Response.tiempo_restante } else { 10 }
+        
+        for ($i = $tiempo; $i -ge 0; $i--) {
+            $Controles.LabelTimer.Text = "🔒 BLOQUEADO - Restante: $(Format-TimeSpan $i)"
+            $Controles.Form.Refresh()
+            
+            $waitUntil = (Get-Date).AddSeconds(1)
+            while ((Get-Date) -lt $waitUntil) {
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Milliseconds 50
+            }
+        }
+    }
+    catch {
+        Write-Log "Error en countdown bloqueado: $_" -Tipo Warning
+    }
+    
+    return Invoke-ApiCall
+}
+
+function Invoke-EstadoSuspendido {
+    param($Controles, $Response)
+    
+    Write-Log "Estado: SUSPENDIDO" -Tipo Warning
+    
+    try {
+        $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Orange
+        $Controles.LabelTimer.Text = "⏸️ SESIÓN SUSPENDIDA"
+        $Controles.Form.Refresh()
+        
+        # Mostrar modal de desbloqueo (simplificado)
+        $resultado = [System.Windows.Forms.MessageBox]::Show(
+            "Sesión suspendida. Ingrese OK para desbloquear con clave admin.",
+            "Sesión Suspendida",
+            [System.Windows.Forms.MessageBoxButtons]::OKCancel,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        
+        if ($resultado -eq [System.Windows.Forms.DialogResult]::OK) {
+            return Invoke-ApiCall -ExtraBody @{ clave_admin = $Global:Config.ClaveAdmin }
+        }
+        else {
+            return Invoke-ApiCall -ExtraBody @{ cancel_suspend = "Cancelar" }
+        }
+    }
+    catch {
+        Write-Log "Error en estado suspendido: $_" -Tipo Error
+        return Invoke-ApiCall
+    }
+}
+
+function Invoke-EstadoHibernado {
+    param($Controles, $Response)
+
+    Write-Log "Estado: HIBERNANDO" -Tipo Warning
+
+    try {
+        $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Orange
+
+        while ($Global:SharedState.SessionActive) {
+            # Mostrar tiempo en hibernación si se conoce
+            $inicio = $Global:SharedState.HibernationStartTime
+            if ($inicio) {
+                $seg = [int]((Get-Date) - $inicio).TotalSeconds
+                $Controles.LabelTimer.Text = "😴 HIBERNANDO - Tiempo: $(Format-TimeSpan $seg)"
+            }
+            else {
+                $Controles.LabelTimer.Text = "😴 HIBERNANDO"
+            }
+            $Controles.Form.Refresh()
+
+            # Esperar un poco y consultar al servidor por cambios de estado
+            Start-Sleep -Seconds 3
+
+            try {
+                $resp = Invoke-ApiCall
+            }
+            catch {
+                $resp = $null
+            }
+
+            # Si el servidor reporta un estado distinto a hibernación, retornamos para continuar el flujo
+            if ($resp -and $resp.estado) {
+                if ($resp.estado -ne 'Hibernando' -and $resp.estado -ne 'Hibernado') {
+                    # Asegurarnos de limpiar flags locales
+                    $Global:SharedState.IsHibernating = $false
+                    $Global:SharedState.HibernationStartTime = $null
+                    return $resp
+                }
+            }
+
+            # Si localmente la hibernación fue interrumpida, salir y refrescar
+            if (-not $Global:SharedState.IsHibernating) {
+                return Invoke-ApiCall
+            }
+        }
+    }
+    catch {
+        Write-Log "Error en estado hibernado: $_" -Tipo Warning
+    }
+
+    return Invoke-ApiCall
+}
+
+function Invoke-EstadoError {
+    param($Controles, $Response)
+    
+    Write-Log "Estado: ERROR - $($Response.mensaje)" -Tipo Error
+    
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            $Response.mensaje,
+            "❌ Error de Sesión",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+        
+        $Controles.Form.Close()
+    }
+    catch { }
+}
+
+# ============================================================
+# 🚀 INICIALIZACIÓN Y BUCLE PRINCIPAL
+# ============================================================
+
+function Start-SessionLoop {
+    Write-Log "Iniciando bucle principal de sesión..." -Tipo Info
+    
+    try {
+        $controles = New-SessionForm
+        $response = Invoke-ApiCall -ExtraBody @{ confirmar_inicio = "true" }
+        
+        if (-not $response.estado) {
+            Write-Log "No se pudo obtener estado inicial" -Tipo Error
+            return
+        }
+        
+        # Iniciar monitor de comandos WebSocket (pasando controles para actualizaciones UI)
+        $queueMonitor = Start-CommandQueueMonitor -Controles $controles
+        
+        # Iniciar monitor de inactividad para hibernación
+        $inactivityMonitor = Monitor-InactivityAndHibernation -Controles $controles
+        
+        $controles.Form.Show()
+        
+        while ($response -and 
+               $response.estado -ne "Finalizado" -and 
+               $response.estado -ne "Restringido" -and
+               $response.estado -ne "Error") {
+            
+            Write-Log "Estado actual: $($response.estado)" -Tipo Info
+            
+            try {
+                switch ($response.estado) {
+                    "Abierto" {
+                        $response = Invoke-EstadoAbierto -Controles $controles -Response $response
+                    }
+                    
+                    "Bloqueado" {
+                        $response = Invoke-EstadoBloqueado -Controles $controles -Response $response
+                    }
+                    
+                    "Suspendido" {
+                        $response = Invoke-EstadoSuspendido -Controles $controles -Response $response
+                    }
+                    
+                    "Renovado" {
+                        $response = Invoke-EstadoRenovado -Controles $controles -Response $response
+                    }
+                       
+                       "Hibernando" {
+                           $response = Invoke-EstadoHibernado -Controles $controles -Response $response
+                       }
+                       
+                       "Hibernado" {
+                           $response = Invoke-EstadoHibernado -Controles $controles -Response $response
+                       }
+                    
+                    default {
+                        # Verificar si FOLIO cerró el préstamo
+                        if ($response.folioResp -and 
+                            $response.folioResp.raw.loan.status.name -eq "Closed") {
+                            Write-Log "Préstamo cerrado en FOLIO" -Tipo Info
+                            break
+                        }
+                        
+                        Write-Log "Estado desconocido: $($response.estado)" -Tipo Warning
+                        Start-Sleep -Seconds 2
+                        $response = Invoke-ApiCall
+                    }
+                }
+            }
+            catch {
+                Write-Log "Error procesando estado: $_" -Tipo Error
+                Start-Sleep -Seconds 2
+                $response = Invoke-ApiCall
+            }
+            
+            Start-Sleep -Milliseconds 100
+        }
+        
+        # Procesar estados finales
+        if ($response.estado -eq "Finalizado") {
+            Invoke-EstadoFinalizado -Controles $controles -Response $response
+        }
+        elseif ($response.estado -eq "Restringido") {
+            Invoke-EstadoRestringido -Controles $controles -Response $response
+        }
+        elseif ($response.estado -eq "Error") {
+            Invoke-EstadoError -Controles $controles -Response $response
+        }
+        
+        # Cleanup
+        try {
+            $queueMonitor.Stop()
+            $queueMonitor.Dispose()
+            $controles.WSTimer.Stop()
+            $controles.WSTimer.Dispose()
+            $controles.Form.Close()
+            $controles.Form.Dispose()
+        }
+        catch { }
+        
+        Write-Log "Bucle de sesión finalizado" -Tipo Success
+    }
+    catch {
+        Write-Log "Error crítico en bucle de sesión: $_" -Tipo Error
+    }
+}
+
+# ============================================================
+# ⏱️ MONITOR DE INACTIVIDAD - Hibernación Automática
+# ============================================================
+
+function Monitor-InactivityAndHibernation {
+    param($Controles)
+    
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 5000  # Verificar cada 5 segundos
+    
+    $timer.Add_Tick({
+        try {
+            $ahora = Get-Date
+            $tiempoSinActividad = ($ahora - $Global:SharedState.LastActivity).TotalSeconds
+            
+            # ========================================
+            # 🟡 ENTRAR EN HIBERNACIÓN (5 min)
+            # ========================================
+            if ($tiempoSinActividad -ge $Global:SharedState.INACTIVITY_TIMEOUT -and -not $Global:SharedState.IsHibernating) {
+                Write-Log "😴 Entrando en modo Hibernando (inactividad: ${tiempoSinActividad}s)" -Tipo Warning
+                $Global:SharedState.IsHibernating = $true
+                $Global:SharedState.HibernationStartTime = $ahora
+                
+                # Notificar al servidor que el equipo entra en hibernación
+                try {
+                    $payload = @{ 
+                        tipo = "hibernado"
+                        accion = "hibernar"
+                        nombre_equipo = $Global:Config.IdEquipo
+                        timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                    }
+                    Enqueue-WSMessage -Payload $payload | Out-Null
+                    Write-Log "📤 Comando hibernación encolado" -Tipo Success
+                }
+                catch {
+                    Write-Log "⚠️ Error encolar hibernación: $_" -Tipo Warning
+                }
+            }
+            
+            # ========================================
+            # 🔴 FINALIZAR SESIÓN (10 min + hibernación)
+            # ========================================
+            if ($Global:SharedState.IsHibernating -and $Global:SharedState.HibernationStartTime) {
+                $tiempoEnHibernacion = ($ahora - $Global:SharedState.HibernationStartTime).TotalSeconds
+                
+                if ($tiempoEnHibernacion -ge $Global:SharedState.HIBERNATION_MAX_DURATION) {
+                    Write-Log "⛔ Finalizando sesión por inactividad prolongada (hibernación: ${tiempoEnHibernacion}s)" -Tipo Error
+                    
+                    # Notificar al servidor para finalizar
+                    try {
+                        $payload = @{ 
+                            tipo = "hibernado"
+                            accion = "finalizar_por_hibernacion"
+                            nombre_equipo = $Global:Config.IdEquipo
+                            timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                        }
+                        Enqueue-WSMessage -Payload $payload | Out-Null
+                        Write-Log "📤 Comando finalización encolado" -Tipo Success
+                    }
+                    catch {
+                        Write-Log "⚠️ Error encolar finalización: $_" -Tipo Warning
+                    }
+                    
+                    # Cerrar la aplicación
+                    $Controles.Form.Close()
+                }
+            }
+            
+            # Actualizar UI con estado de hibernación
+            if ($Global:SharedState.IsHibernating) {
+                $tiempoEnHiber = ($ahora - $Global:SharedState.HibernationStartTime).TotalSeconds
+                $Controles.LabelTimer.Text = "😴 HIBERNANDO - Tiempo: $(Format-TimeSpan $tiempoEnHiber)"
+                $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Orange
+            }
+        }
+        catch {
+            # Ignorar errores en el timer
+        }
+    })
+    
+    $timer.Start()
+    return $timer
+}
+
+function Initialize-System {
+    Write-Log "╔══════════════════════════════════════════════════════╗" -Tipo Info
+    Write-Log "  SISTEMA DE AUTOPRÉSTAMOS - UNIVERSIDAD SIMÓN BOLÍVAR" -Tipo Info
+    Write-Log "╚══════════════════════════════════════════════════════╝" -Tipo Info
+    
+    # Detectar interfaz de red
+    Write-Log "Detectando configuración de red..." -Tipo Info
+    $networkInfo = Get-ActiveNetworkInterface
+    
+    if (-not $networkInfo) {
+        Write-Log "No se pudo detectar la red. Abortando..." -Tipo Error
+        return $false
+    }
+    
+    $Global:SharedState.MacAddress = $networkInfo.MAC
+    
+    # Verificar logo
+    if (-not (Test-Path $Global:Config.LogoPath)) {
+        Write-Log "Logo no encontrado (se continuará sin logo)" -Tipo Warning
+    }
+    
+    # Conectar WebSocket
+    Write-Log "Estableciendo conexión WebSocket..." -Tipo Info
+    Start-WebSocketProcess
+    
+    Write-Log "⏳ Esperando inicialización de WebSocket (3 seg)..." -Tipo Info
+    Start-Sleep -Seconds 3
+    
+    if ($Global:SharedState.WebSocketConnected) {
+        Write-Log "✅ WebSocket conectado" -Tipo Success
+    }
+    else {
+        Write-Log "⚠️ WebSocket no conectado (funcionará en modo degradado)" -Tipo Warning
+    }
+    
+    Write-Log "✅ Inicialización completada" -Tipo Success
+    return $true
+}
+
+function Clear-Resources {
+    Write-Log "Limpiando recursos..." -Tipo Info
+    
+    try {
+        Stop-WebSocketProcess
+    }
+    catch {
+        Write-Log "Error al detener WebSocket: $_" -Tipo Warning
+    }
+    
+    Write-Log "✅ Recursos liberados" -Tipo Success
+}
+
+# ============================================================
+# 🎬 PUNTO DE ENTRADA PRINCIPAL
+# ============================================================
+
+try {
+    Clear-Host
+    Write-Host ""
+    Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║                                                      ║" -ForegroundColor Cyan
+    Write-Host "║    SISTEMA DE AUTOPRÉSTAMOS - UNISIMÓN              ║" -ForegroundColor Cyan
+    Write-Host "║    v2.2 - Arquitectura Dual Process                 ║" -ForegroundColor Cyan
+    Write-Host "║    (Depuración Completa)                            ║" -ForegroundColor Cyan
+    Write-Host "║                                                      ║" -ForegroundColor Cyan
+    Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Inicializar sistema
+    $initialized = Initialize-System
+    
+    if (-not $initialized) {
+        Write-Log "Fallo en la inicialización. Abortando..." -Tipo Error
+        exit 1
+    }
+    
+    # Ejecutar bucle de sesión
+    Start-SessionLoop
+    
+    Write-Log "✅ Ejecución completada exitosamente" -Tipo Success
+}
+catch {
+    Write-Log "❌ Error crítico: $($_.Exception.Message)" -Tipo Error
+    Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Tipo Error
+}
+# ============================================================
+# FIN DEL SCRIPT - v2.2
+# ============================================================

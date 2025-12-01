@@ -1,0 +1,28 @@
+[2025-12-01 21:02:29] 🧹 Proceso no encontrado, PID eliminado (6308)
+[2025-12-01 21:02:29] 🔴 No se detectó ningún proceso activo en 8081
+[2025-12-01 21:02:38] 📡 Detectado proceso escuchando en 8081 (PID 7484)
+[2025-12-01 21:02:41] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:02:42] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:10:42] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:10:43] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:10:43] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:10:52] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:10:52] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:10:53] ✔️ Servidor WebSocket activo (PID 7484)
+[2025-12-01 21:22:27] 🧹 Proceso no encontrado, PID eliminado (7484)
+[2025-12-01 21:22:27] 🔴 No se detectó ningún proceso activo en 8081
+[2025-12-01 21:22:29] 🔴 No se detectó ningún proceso activo en 8081
+[2025-12-01 21:23:37] 📡 Detectado proceso escuchando en 8081 (PID 1964)
+[2025-12-01 21:23:38] ✔️ Servidor WebSocket activo (PID 1964)
+[2025-12-01 21:35:50] 🧹 Proceso no encontrado, PID eliminado (1964)
+[2025-12-01 21:35:50] 🔴 No se detectó ningún proceso activo en 8081
+[2025-12-01 21:35:52] 🔴 No se detectó ningún proceso activo en 8081
+[2025-12-01 21:35:55] 📡 Detectado proceso escuchando en 8081 (PID 20672)
+[2025-12-01 21:35:56] ✔️ Servidor WebSocket activo (PID 20672)
+[2025-12-01 21:35:57] ✔️ Servidor WebSocket activo (PID 20672)
+[2025-12-01 21:41:33] 🧹 Proceso no encontrado, PID eliminado (20672)
+[2025-12-01 21:41:33] 📡 Detectado proceso escuchando en 8081 (PID 11808)
+[2025-12-01 21:41:33] ✔️ Servidor WebSocket activo (PID 11808)
+[2025-12-01 21:44:56] 🧹 Proceso no encontrado, PID eliminado (11808)
+[2025-12-01 21:44:56] 📡 Detectado proceso escuchando en 8081 (PID 17352)
+[2025-12-01 21:44:56] ✔️ Servidor WebSocket activo (PID 17352)
