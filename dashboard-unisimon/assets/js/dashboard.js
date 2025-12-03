@@ -67,7 +67,7 @@ async function conectarD() {
       const ok = await conectarWS();
       if (ok) {
         // Aplicar filtro por sede SOLO después de conectar correctamente
-        await aplicarFiltroSede();
+        actualizarTabla();
         conectado = true;
         // Guardar estado de conexión en localStorage
         localStorage.setItem("dashboard_conectado", "true");
@@ -146,7 +146,8 @@ async function verificarServidor() {
     btn.classList.remove("btn-primary", "btn-warning");
     btn.classList.add("btn-success");
     // Registrar en log en lugar de toast informativo para evitar ruido
-    try { agregarLog("🟢 " + data.mensaje, 'info'); } catch(e) { console.log(data.mensaje); }
+    try { 
+    agregarLog("🟢 " + data.mensaje, 'info'); } catch(e) { console.log(data.mensaje); }
     conectado_server = true;
     } else if (data.status === "detenido") {
       mostrarDesconectado();
@@ -233,7 +234,7 @@ async function fetchEstado() {
   } catch (err) {
     console.warn("❌ No se pudo cargar estado via HTTP:", err);
     mostrarDesconectado();
-    actualizarStats({ Abierto: 0, Suspendido: 0, Bloqueado: 0, Hibernado: 0, Finalizado: 0 });
+    actualizarStats({ Abierto: 0, Suspendido: 0, Bloqueado: 0, Finalizado: 0 });
   }
 }
 
@@ -269,7 +270,6 @@ function actualizarStats(stats) {
   document.getElementById("stat-suspendido").textContent =
     stats.Suspendido ?? 0;
   document.getElementById("stat-bloqueado").textContent = stats.Bloqueado ?? 0;
-  document.getElementById("stat-Hibernado").textContent = stats.Hibernado ?? 0;
   document.getElementById("stat-finalizado").textContent =
     stats.Finalizado ?? 0;
 }
@@ -375,6 +375,73 @@ function detenerServidor() {
     });
 }
 
+function agregarSolicitud(pc, sessionId) {
+    const tabla = document.querySelector("#tablaSolicitudes tbody");
+    // si está el mensaje de "sin solicitudes", eliminarlo
+    if (tabla.querySelector("td[colspan]")) tabla.innerHTML = "";
+
+    const row = document.createElement("tr");
+
+    const colPC = document.createElement("td");
+    colPC.textContent = pc;
+
+    const colHora = document.createElement("td");
+    colHora.textContent = new Date().toLocaleTimeString();
+
+    const colAcciones = document.createElement("td");
+
+    // Botón aceptar
+    const btnAceptar = document.createElement("button");
+    btnAceptar.className = "btn-accion btn-aceptar";
+    btnAceptar.textContent = "Aceptar";
+    btnAceptar.onclick = () => {
+        enviarRespuestaSolicitud(sessionId, true);
+        row.remove();
+        verificarTablaVacia();
+    };
+
+    // Botón rechazar
+    const btnRechazar = document.createElement("button");
+    btnRechazar.className = "btn-accion btn-rechazar";
+    btnRechazar.textContent = "Rechazar";
+    btnRechazar.onclick = () => {
+        enviarRespuestaSolicitud(sessionId, false);
+        row.remove();
+        verificarTablaVacia();
+    };
+
+    colAcciones.appendChild(btnAceptar);
+    colAcciones.appendChild(btnRechazar);
+
+    row.appendChild(colPC);
+    row.appendChild(colHora);
+    row.appendChild(colAcciones);
+
+    tabla.appendChild(row);
+}
+
+function verificarTablaVacia() {
+    const tabla = document.querySelector("#tablaSolicitudes tbody");
+    if (tabla.children.length === 0) {
+        tabla.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#777">Sin solicitudes</td></tr>`;
+    }
+}
+
+function enviarRespuestaSolicitud(sessionId, aceptar) {
+    const payload = {
+        tipo: "respuesta_solicitud",
+        action: aceptar ? "aceptar_renovacion" : "rechazar_renovacion",
+        session: sessionId,
+        origen: "dashboard",
+    };
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+    } else {
+        console.error("WebSocket no conectado");
+    }
+}
+
 // ✅ FUNCIÓN CORREGIDA - actualizarTabla
 async function actualizarTabla(sesiones) {
   const tbody = document.querySelector("#tablaSesiones tbody");
@@ -384,10 +451,11 @@ async function actualizarTabla(sesiones) {
   }
   // Si no pasan sesiones, intentamos obtener vía HTTP o WS
   if (!sesiones || sesiones.length === 0) {
-    console.log("ℹ️ No hay sesiones, intentando obtener...");
     // Si WS está abierto, el heartbeat se encargará de la actualización
     if (typeof ws !== "undefined" && ws && ws.readyState === WebSocket.OPEN) {
       // El heartbeat cada 8s se encargará de actualizar
+      console.log("ℹ️ Datos de sesiones obtenidos");
+      HEARTBEAT_INTERVAL
       return;
     } else {
       // fallback HTTP - solo si WS no está disponible
@@ -452,6 +520,9 @@ async function actualizarTabla(sesiones) {
     }</td>
             <td class="text-${estadoColor(s.nombre_estado)}">${
       s.fecha_final_real || "-"
+    }</td>
+            <td class="text-${estadoColor(s.nombre_estado)}">${
+      s.bloqueado_hasta || "N/A "
     }</td>
             <td><span class="badge bg-${estadoColor(s.nombre_estado)}">${
       s.nombre_estado || "-"
@@ -546,8 +617,6 @@ function estadoColor(e) {
       return "warning";
     case "Bloqueado":
       return "danger";
-    case "Hibernado":
-      return "info";
     case "Finalizado":
       return "dark";
     default:
@@ -644,7 +713,7 @@ function accionSesion(id, accion) {
   const fila = document.querySelector(`tr[data-sesion-id="${id}"]`);
   const username = fila ? fila.getAttribute("data-username") : "desconocido";
   const estado = fila ? fila.getAttribute("data-estado") : "desconocido";
-  const nombre_pc = fila ? fila.getAttribute("data-pc") : "desconocido";
+  const nombre_equipo = fila ? fila.getAttribute("data-pc") : "desconocido";
 
   console.log(
     `📋 Detalles sesión - ID: ${id}, Usuario: ${username}, Estado: ${estado}`
@@ -652,7 +721,7 @@ function accionSesion(id, accion) {
 
   if (
     !confirm(
-      `¿Estás seguro de ejecutar '${accion}' en la sesión ${id} del equipo (${nombre_pc})`
+      `¿Estás seguro de ejecutar '${accion}' en la sesión ${id} del equipo (${nombre_equipo})`
     )
   ) {
     console.log("❌ Usuario canceló la acción");
@@ -664,11 +733,13 @@ function accionSesion(id, accion) {
     const payload = {
       tipo: "comando",
       accion: accion, // suspender, bloquear, etc.
-      nombre_eq: nombre_pc,
-      id_eq: id, // nombre del equipo o ID
+      nombre_equipo: nombre_equipo,
+      id_equipo: id, // nombre del equipo o ID
       origen: "dashboard",
+      destino: nombre_equipo,
       id_p_servicio: sedeSeleccionada ? parseInt(sedeSeleccionada) : null,
       timestamp: new Date().toISOString(),
+      usuario: username,
     };
 
     console.log("📡 Enviando comando WebSocket:", payload);
@@ -1020,7 +1091,6 @@ function debugWebSocket(){
 // 📡 FUNCIÓN DE ENVÍO DE ESTADO - Procesamiento silencioso de datos
 function enviarEstado(data) {
   if (!data) return;
-  
   try {
     // Procesar datos con el mismo patrón que onmessage
     if (data.tipo === "estado") {

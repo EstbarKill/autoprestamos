@@ -50,9 +50,12 @@
           <i class="bi bi-gear"></i> Configuración
         </button>
         <!-- Registros movidos a la barra lateral (siempre visibles cuando WS activo) -->
-        <button class="btn btn-light w-100" onclick="mostrarPagina('mensajes')">
+        <button class="btn btn-light w-100 mb-2" onclick="mostrarPagina('mensajes')">
           <i class="bi bi-chat-dots"></i> Mensajes
         </button>
+        <button class="bi bi-play btn btn-light w-100 mb-2" id="btnEncenderServidor" onclick="manejoServidor()">
+            Apagado
+        </button> 
       </div>
       <hr class="text-white" />
       <div id="stats" class="mt-auto">
@@ -61,7 +64,6 @@
           <li>🟢 Abiertos: <span id="stat-abierto">0</span></li>
           <li>🟡 Suspendidos: <span id="stat-suspendido">0</span></li>
           <li>🔴 Bloqueados: <span id="stat-bloqueado">0</span></li>
-          <li>🟡 Hibernado: <span id="stat-Hibernado">0</span></li>
           <li>⚫ Finalizados: <span id="stat-finalizado">0</span></li>
         </ul>
               
@@ -93,7 +95,6 @@
             <option value="Abierto">Abierto</option>
             <option value="Suspendido">Suspendido</option>
             <option value="Bloqueado">Bloqueado</option>
-            <option value="Hibernado">Hibernado</option>
             <option value="Finalizado">Finalizado</option>
           </select>
           <button class="btn btn-outline-success ms-2" onclick="actualizarDatos()">🔄 Actualizar</button>
@@ -143,6 +144,7 @@
                 <th>Final Programado</th>
                 <th>Hora de Finalizacion</th>
                 <th>Estado</th>
+                <th>Bloqueado hasta</th>
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -162,7 +164,6 @@
     <label>Clave de administrador:</label>
     <input type="password" id="config-clave" class="form-control mb-3" value="S1m0n_2025" />
     <button class="btn btn-success" onclick="guardarConfig()">💾 Guardar configuración</button>
-       <button class="btn btn-primary" id="btnEncenderServidor" onclick="manejoServidor()">Apagado</button> 
     </div>
    
   </div>
@@ -177,6 +178,22 @@
           <button class="btn btn-success" onclick="enviarMensaje()">📤 Enviar</button>
           <button class="btn btn-warning" onclick="enviarMensajeATodos()">🌍 Enviar a todos</button>
         </div>
+        <div id="solicitudesContainer" class="solicitudes-box">
+    <h3>Solicitudes de Renovación</h3>
+    <table id="tablaSolicitudes">
+        <thead>
+            <tr>
+                <th id="sesionId">PC</th>
+                <th>Hora</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td colspan="3" style="text-align:center; color:#777">Sin solicitudes</td></tr>
+        </tbody>
+    </table>
+</div>
+
       </div>
     </main>
     <script src="./assets/js/websocket.js"></script>

@@ -8,16 +8,48 @@ const ESTADO_SUSPENDIDO = 3;
 const ESTADO_BLOQUEADO  = 4;
 const ESTADO_HIBERNANDO  = 5;
 
-function actualizarEstado($conn, $sesionId, $nuevoEstado, $fechaFinal = null) {
-    if ($fechaFinal) {
-        $stmt = $conn->prepare("UPDATE sesiones SET id_estado_fk=?, fecha_final_real=? WHERE id=?");
-        $stmt->bind_param("isi", $nuevoEstado, $fechaFinal, $sesionId);
-    } else {
-        $stmt = $conn->prepare("UPDATE sesiones SET id_estado_fk=? WHERE id=?");
-        $stmt->bind_param("ii", $nuevoEstado, $sesionId);
+function actualizarEstado(
+    $conn,
+    $sesionId,
+    $nuevoEstado,
+    $fechaFinal = null,
+    $bloqueadoDesde = null,
+    $bloqueadoHasta = null
+) {
+    $sql = "UPDATE sesiones SET id_estado_fk=?";
+    $params = [$nuevoEstado];
+    $types  = "i";
+
+    // Si viene fecha final → registrar finalización real
+    if ($fechaFinal !== null) {
+        $sql .= ", fecha_final_real=?";
+        $params[] = $fechaFinal;
+        $types    .= "s";
     }
+
+    // Si viene info de bloqueo → ponerlos
+    if ($bloqueadoDesde !== null && $bloqueadoHasta !== null) {
+        $sql .= ", bloqueado_desde=?, bloqueado_hasta=?";
+        $params[] = $bloqueadoDesde;
+        $params[] = $bloqueadoHasta;
+        $types    .= "ss";
+    }
+
+    // 🔥 Limpieza automática si NO se está bloqueando
+    if ($nuevoEstado != ESTADO_BLOQUEADO) {
+        $sql .= ", bloqueado_desde=NULL, bloqueado_hasta=NULL";
+    }
+
+    $sql .= " WHERE id=?";
+    $params[] = $sesionId;
+    $types    .= "i";
+
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param($types, ...$params);
     $stmt->execute();
 }
+
+
 
 function crearSesion($conn, $userId, $username_full, $id_equipo, $intervaloTiempo) {
     $estadoInicial = ESTADO_ABIERTO;

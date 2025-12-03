@@ -9,7 +9,6 @@ $data = [
     "Abierto" => 0,
     "Suspendido" => 0,
     "Bloqueado" => 0,
-    "Hibernado" => 0,
     "Finalizado" => 0
 ];
 
@@ -39,8 +38,6 @@ while ($r = $q->fetch_assoc()) {
     if ($nombre === 'abierto') $data['Abierto'] = $total;
     if ($nombre === 'suspendido') $data['Suspendido'] = $total;
     if ($nombre === 'bloqueado') $data['Bloqueado'] = $total;
-    // Aceptar variantes: 'hibernado', 'hibernando', 'hibernación', etc. (strtolower ya aplicado)
-    if (strpos($nombre, 'hibern') !== false) $data['Hibernado'] = $total;
     if ($nombre === 'finalizado') $data['Finalizado'] = $total;
 }
 

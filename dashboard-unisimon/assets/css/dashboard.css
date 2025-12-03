@@ -333,3 +333,31 @@ body { font-family: "Segoe UI", Tahoma, sans-serif; background-size: cover; back
   top: 0;
   z-index: 999;
 }
+.solicitudes-box {
+    margin-top: 15px;
+    padding: 12px;
+    background: #ffffff;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+}
+
+#tablaSolicitudes {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#tablaSolicitudes th, #tablaSolicitudes td {
+    padding: 8px;
+    border-bottom: 1px solid #e2e2e2;
+}
+
+.btn-accion {
+    padding: 4px 8px;
+    font-size: 12px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.btn-aceptar { background: #28a745; color: white; }
+.btn-rechazar { background: #dc3545; color: white; }

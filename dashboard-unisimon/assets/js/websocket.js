@@ -9,9 +9,13 @@ window.MAX_RECONNECT = 5;
 window.RECONNECT_BASE_DELAY = 2000; // ms
 window.reconnecting = false;
 
-const HEARTBEAT_INTERVAL = 10000; // 8 segundos - intervalo único de actualización
+const HEARTBEAT_INTERVAL = 100000; // 8 segundos - intervalo único de actualización
 
 window.conectarWS = async function () {
+      try { ws.onopen = null; } catch {}
+    try { ws.onmessage = null; } catch {}
+    try { ws.onclose = null; } catch {}
+    try { ws.onerror = null; } catch {}
   const btn = document.querySelector("#toggleBtn");
   const dot = document.querySelector("#statusDot");
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -84,7 +88,6 @@ window.conectarWS = async function () {
             nombre_p_servicio: sedeNombre,
           })
         );
-
         resolve(true);
       };
 
@@ -103,19 +106,23 @@ window.conectarWS = async function () {
             case "log":
               agregarLog(data.mensaje, "success");
               break;
+            case "confirmacion_comando":
+              agregarLog(`⚙️ Confiramcion '${data.accion}' estado en ${data.estado}`, "info");
+              break;
             case "comando":
               // Registrar ejecución de comandos en el log; evitar toast por cada comando
               agregarLog(`⚙️ Comando '${data.accion}' ejecutado en ${data.nombre_pc}`, "info");
               break;
             case "equipo_desconectado":
               // Registrar en log; si es necesario, dashboard puede mostrar resumen
-              agregarLog(`🔌 Equipo desconectado: ${data.nombre_pc}`, "warning");
+              agregarLog(`🔌 Equipo desconectado: ${data.id}`, "warning");
               break;
             case "confirmacion":
               nombre_eq = data.nombre_eq;
               accionSesion = data.accion;
               resultadoSesion = data.resultado;
               origen = data.origen;
+              usuario = data.usuario;
               if (origen == "server") {
                 // Confirmaciones desde el servidor: mostrar toast para acciones críticas
                 if (data.accion === 'finalizar' || data.accion === 'bloquear') {
@@ -141,40 +148,27 @@ window.conectarWS = async function () {
               agregarLog(`🖥️ Equipos conectados: ${data.cantidad}`, "info");
               break;
             case "confirmacion_registro":
+              usuario = data.usuario;
               // Registrar en log; no mostrar toast para registro automático
-              agregarLog(`✅ Registro exitoso: ${data.nombre_eq}`, "success");
-              break;
-            case "cambio_estado":
-              // Notificación de cambio de estado de sesión (ej. hibernación)
-              const estadoNuevo = data.estado_nuevo || "Desconocido";
-              const nombreEquipo = data.nombre_equipo || "Equipo desconocido";
-              const razon = data.razon ? ` (${data.razon})` : "";
-              
-              // Mostrar toast según el nuevo estado
-              let tipoToast = "info";
-              let icono = "ℹ️";
-              if (estadoNuevo === "Hibernado") {
-                tipoToast = "warning";
-                icono = "😴";
-              } else if (estadoNuevo === "Finalizado") {
-                tipoToast = "danger";
-                icono = "⛔";
+              if(usuario == "dashboard"){
+                  agregarLog(`✅ Dashboard en linea: ${data.nombre_equipo}`, "success");
+                  mostrarToast(`✅ Dashboard en linea: ${data.nombre_equipo}`, "success");
+              }else if(usuario == "equipo"){
+                 agregarLog(`✅ Equipo en linea: ${data.nombre_equipo}`, "success");
+                mostrarToast(`✅ Dashboard en linea: ${data.nombre_equipo}`, "success");
               }
-              
-              // Cambio de estado visible: toast y log
-              mostrarToast(`${icono} ${nombreEquipo} → ${estadoNuevo}${razon}`, tipoToast);
-              agregarLog(`${icono} ${nombreEquipo} cambió a estado: ${estadoNuevo}${razon}`, tipoToast === 'danger' ? 'error' : 'warning');
-              
-              // Refrescar tabla de sesiones
-              ws.send(
-                JSON.stringify({
-                  tipo: "actualizar",
-                  origen: "dashboard",
-                })
-              );
               break;
+            case "proceso_comando":
+                  agregarLog(`✅ Proceso comando: ${data.accion} Resultado ${data.resultado}`, "success");
+                  mostrarToast(`✅ Proceso comando: ${data.accion} Resultado ${data.resultado}`, "success");
+                  break;
+            case "solicitud":
+                agregarLog(`Solicitud de renovación del PC ${data.nombre_equipo}`, "info");
+                agregarSolicitud(data.nombre_equipo, data.sessionId);
+                break;
             default:
               console.log("📡 Mensaje no manejado:", data);
+              break;
           }
         } catch (err) {
           console.error("❌ Error parseando mensaje:", err, event.data);

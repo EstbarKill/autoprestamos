@@ -28,6 +28,47 @@ class DashboardServer implements MessageComponentInterface
         $this->dashboards = [];
         $this->conn = $conn;
     }
+    public function verificarDesbloqueos() {
+    // Buscar sesiones bloqueadas cuyo tiempo ya expiró
+    $sql = "
+        SELECT id, id_equipo_fk
+        FROM sesiones
+        WHERE id_estado_fk = 4
+        AND bloqueado_hasta IS NOT NULL
+        AND bloqueado_hasta <= NOW();
+    ";
+
+    $result = $this->conn->query($sql);
+
+    if (!$result) {
+        $this->log("❌ Error verificando desbloqueos: " . $this->conn->error);
+        return;
+    }
+
+    while ($row = $result->fetch_assoc()) {
+        $idSesion = $row['id'];
+
+        // Cambiar a FINALIZADO
+        $this->conn->query("
+            UPDATE sesiones 
+            SET estado = 'finalizado',
+                bloqueado_hasta = NULL,
+                bloqueado_desde = NULL
+            WHERE id = $idSesion
+        ");
+
+        $this->log("🔓 Sesión $idSesion pasó a FINALIZADO automáticamente");
+
+        // Notificar dashboards
+        $this->notificarDashboards([
+            "tipo"      => "estado_cambiado",
+            "id_sesion" => $idSesion,
+            "estado"    => "finalizado",
+            "hora"      => date("Y-m-d H:i:s")
+        ]);
+    }
+}
+
 
     // ============================================================
     // 🟢 NUEVA CONEXIÓN
@@ -38,6 +79,7 @@ class DashboardServer implements MessageComponentInterface
         $conn->tipoCliente = null; // 'equipo' o 'dashboard'
         $conn->idCliente = null;
         $this->log("🟢 Cliente conectado: ({$conn->resourceId})");
+                $this->verificarDesbloqueos();
     }
 
     // ============================================================
@@ -50,6 +92,7 @@ class DashboardServer implements MessageComponentInterface
             $this->log("⚠️ Mensaje no JSON: $msg");
             return;
         }
+
         // Primary routing by tipo (preferred) or accion
         switch ($data['tipo'] ?? '') {
             // ========================================
@@ -59,8 +102,9 @@ class DashboardServer implements MessageComponentInterface
                 if ($data['origen'] == 'dashboard') {
                     $from->nombre_equipo = $data['nombre_equipo'] ?? 'Desconocido';
                     $from->tipoCliente = 'dashboard';
+                    $from->id_p_servicio = $data['id_p_servicio'] ?? null;
                     $from->puntoServicio = [
-                        'id' => $data['id_p_servicio'] ?? null,
+                        'id' => $from->id_p_servicio ?? null,
                         'nombre' => $data['nombre_p_servicio'] ?? 'Desconocido'
                     ];
                     $this->dashboards[$from->resourceId] = $from;
@@ -69,7 +113,7 @@ class DashboardServer implements MessageComponentInterface
                         'tipo' => 'confirmacion_registro',
                         'origen' => 'server',
                         'usuario' => 'dashboard',
-                        'nombre_eq' => $from->nombre_equipo,
+                        'nombre_equipo' => $from->nombre_equipo,
                         'punto_servicio' => $from->puntoServicio,
                         'equipos' => array_keys($this->equipos)
                     ]));
@@ -78,13 +122,27 @@ class DashboardServer implements MessageComponentInterface
                 if ($data['origen'] == 'equipo') {
                     $from->tipoCliente = 'equipo';
                     $from->idCliente = $data['nombre_equipo'] ?? 'Desconocido';
-                    $from->id_p_servicio = $data['id_p_servicio'] ?? null;
-                    $from->puntoServicio = [
-                        'id' => $data['id_p_servicio'] ?? null,
-                        'nombre' => $data['nombre_p_servicio'] ?? null
-                    ];
+
+                    // Buscar punto de servicio en BD
+                    $puntoServicio = $this->getPuntoServicioPorEquipo($from->idCliente);
+
+                    if ($puntoServicio) {
+                        $from->id_p_servicio = $puntoServicio['id'];
+                        $from->puntoServicio = [
+                            'id' => $puntoServicio['id'],
+                            'nombre' => $puntoServicio['nombre']
+                        ];
+                    } else {
+                        $from->id_p_servicio = null;
+                        $from->puntoServicio = [
+                            'id' => null,
+                            'nombre' => 'Desconocido'
+                        ];
+                    }
+
                     $this->equipos[$from->idCliente] = $from;
-                    echo "🖥️ Equipo registrado: {$from->idCliente}\n";
+                    echo "🖥️ Equipo registrado: {$from->idCliente} con punto de servicio: {$from->id_p_servicio}\n";
+                    $this->enviarEstado($from);
                     $from->send(json_encode([
                         'tipo' => 'confirmacion_registro',
                         'origen' => 'server',
@@ -92,86 +150,316 @@ class DashboardServer implements MessageComponentInterface
                         'equipos' => array_keys($this->equipos)
                     ]));
                 }
-                break;
-            case 'actualizar':
-                if ($data['origen'] == 'dashboard') {
-                    $from->tipoCliente = 'dashboard';
-                    $this->dashboards[] = $from;
-                    echo "📊 Dashboard conectado: ID:({$from->resourceId})\n";
-                    $this->enviarEstado($from);
-                }
+
                 break;
             case 'comando':
                 $accion = $data['accion'] ?? 'undefined';
-                $nombre_pc = $data['nombre_eq'] ?? $data['destino'] ?? null;
-                $destino = $data['destino'] ?? null;
+                $nombre_equipo = $data['nombre_equipo'] ?? null;
+                $origen = $data['origen'] ?? null;
                 $manejo = null;
                 $texto = $data['mensaje'] ?? null;
-                $destino = $data['destino'] ?? null;
+                $destino = $data['destino'] ?? $data['nombre_equipo'] ?? null;
                 $id_p_servicio = $data['id_p_servicio'] ?? null;
+                if ($origen === 'dashboard') {
+                    switch ($accion) {
+                        case 'mensaje':
+                            $manejo = 'mensaje';
+                            break;
+                        case 'info':
+                            $manejo = 'ver_info';
+                            break;
+                        default:
+                            $manejo = 'comandos';
+                            break;
+                    }
 
-                switch ($accion) {
-                    case 'mensaje':
-                        $manejo = 'mensaje';
+                    if (!$destino) {
+                        echo "⚠️ No se especifico destino.\n";
+                        return;
+                    }
+                    // 🧠 Envío a todos
+                    if (strtolower($destino) === 'todos') {
+                        echo "🌍 Enviando mensaje a todos los equipos conectados...\n";
+                        foreach ($this->equipos as $equip) {
+                            $equipPuntoId = $equip->id_p_servicio ?? ($equip->puntoServicio['id'] ?? null);
+                            if ($equipPuntoId && $equipPuntoId == ($from->puntoServicio['id'] ?? null)) {
+                                $equip->send(json_encode([
+                                    'tipo'    => 'control_server',
+                                    'accion'  => $accion,
+                                    'manejo'  => $manejo,
+                                    'id_p_servicio' => $id_p_servicio,
+                                    'texto'   => $texto,
+                                    'origen'  => 'server',
+                                    'destino' => 'shell',
+                                    'timestamp' => date('Y-m-d H:i:s')
+                                ]));
+                            }
+                        }
                         break;
-                    case 'info':
-                        $manejo = 'ver_info';
-                        break;
-                    default:
-                        $manejo = 'comandos';
-                        break;
-                }
+                    }
+                    echo " Enviando comando '{$accion}' a equipo '{$destino}'...Manejo '{$manejo}'\n";
+                    $found = false;
 
-                if (!$nombre_pc) {
-                    echo "⚠️ No se especificó ID de destino.\n";
-                    return;
-                }
-                // 🧠 Envío a todos
-                if (strtolower($destino) === 'todos') {
-                    echo "🌍 Enviando mensaje a todos los equipos conectados...\n";
                     foreach ($this->equipos as $equip) {
-                        $equipPuntoId = $equip->id_p_servicio ?? ($equip->puntoServicio['id'] ?? null);
-                        if ($equipPuntoId && $equipPuntoId == ($from->puntoServicio['id'] ?? null)) {
-                            $equip->send(json_encode([
-                                'tipo'    => 'control_server',
-                                'accion'  => $accion,
-                                'manejo'  => $manejo,
-                                'texto'   => $texto,
-                                'origen'  => 'server',
+                        if (isset($equip->idCliente) && $equip->idCliente === $destino) {
+                            $found = true;
+                            $payload = [
+                                'tipo' => 'control_server',
+                                "manejo" => $manejo,
+                                'accion' => $accion,
+                                'id_p_servicio' => $id_p_servicio,
+                                'texto'     => $texto,
+                                'origen' => 'server',
+                                'destino' => 'shell',
                                 'timestamp' => date('Y-m-d H:i:s')
-                            ]));
+                            ];
+                            $equip->send(json_encode($payload));
+                            echo "✅ Comando '{$accion}' enviado a {$destino}\n";
+                            break;
                         }
                     }
-                    break;
-                }
-                echo " Enviando comando '{$accion}' a equipo '{$nombre_pc}'...Manejo '{$manejo}'... Destino '{$destino}'\n";
-                $found = false;
 
-                foreach ($this->equipos as $equip) {
-                    if (isset($equip->idCliente) && $equip->idCliente === $nombre_pc) {
-                        $found = true;
-                        $payload = [
-                            'tipo' => 'control_server',
-                            "manejo" => $manejo,
-                            'accion' => $accion,
-                            'id_p_servicio' => $id_p_servicio,
-                            'texto'     => $texto,
-                            'origen' => 'server',
-                            'timestamp' => date('Y-m-d H:i:s')
-                        ];
-                        $equip->send(json_encode($payload));
-                        echo "✅ Comando '{$accion}' enviado a {$nombre_pc}\n";
-                        break;
+                    if (!$found) {
+                        echo "❌ Equipo '{$nombre_equipo}' no conectado.\n";
+                        $from->send(json_encode([
+                            'tipo'    => 'error',
+                            'mensaje' => "El equipo '{$destino}' no está conectado.",
+                            'origen'  => 'server'
+                        ]));
                     }
                 }
+                if ($origen === 'equipo') {
+                    $nombre_equipo = $data['nombre_equipo'] ?? null;
+                    $idEquipo = null;
+                    $sessionId = null;
+                    switch ($accion) {
 
-                if (!$found) {
-                    echo "❌ Equipo '{$nombre_pc}' no conectado.\n";
-                    $from->send(json_encode([
-                        'tipo' => 'error',
-                        'mensaje' => "Equipo '$nombre_pc' no está conectado al servidor."
+                        case 'solicitar_renovacion':
+                            // 1. Buscar ID del equipo
+                            $stmt = $this->conn->prepare("
+                            SELECT id_equipo
+                            FROM equipos
+                            WHERE nombre_pc = ?
+                            LIMIT 1
+                        ");
+
+                            $stmt->bind_param("s", $nombre_equipo);
+                            $stmt->execute();
+                            $stmt->bind_result($idEquipo);
+                            $stmt->fetch();
+                            $stmt->close();
+
+                            if (!$idEquipo) {
+                                $this->log("❌ No existe equipo con nombre '$nombre_equipo'");
+                                break;
+                            }
+
+                            // 2. Buscar la última sesión asociada al equipo
+                            $stmt = $this->conn->prepare("
+                                SELECT id
+                                FROM sesiones
+                                WHERE id_equipo_fk = ?
+                                ORDER BY id DESC
+                                LIMIT 1
+                            ");
+
+                            $stmt->bind_param("i", $idEquipo);
+                            $stmt->execute();
+                            $stmt->bind_result($sessionId);
+                            $stmt->fetch();
+                            $stmt->close();
+
+                            if (!$sessionId) {
+                                $this->log("❌ No se encontró sesión activa para el equipo ID $idEquipo ($nombre_equipo)");
+                                break;
+                            }
+
+                            // 3. Construir payload
+                            $payload = [
+                                'tipo'          => 'solicitud',
+                                'nombre_equipo' => $nombre_equipo,
+                                'estado'        => 'renovacion',
+                                'sessionId'     => $sessionId,
+                                'timestamp'     => date('Y-m-d H:i:s')
+                            ];
+
+                            // 4. Notificar dashboards
+                            $this->log("📢 Notificando dashboards (renovación): " . json_encode($payload));
+                            $this->notificarDashboards($payload);
+                            break;
+                    }
+                }
+                break;
+                case 'solicitud':
+    $accion = $data['accion'] ?? null;
+    $nombre_equipo = $data['nombre_equipo'] ?? null;
+    $usuario = $data['username'] ?? null;
+    $mac = $data['mac_eq'] ?? null;
+
+    if (!$nombre_equipo) {
+        $this->log("❌ solicitud sin nombre_equipo");
+        break;
+    }
+
+    switch ($accion) {
+
+        case 'solicitar_renovacion':
+            // Reutilizar flujo del case 'comando' → equipo
+            $this->procesarSolicitudRenovacion($nombre_equipo);
+            break;
+
+        case 'cerrar':
+        case 'expirado':
+        case 'renovar_clave':
+
+            // Enviar confirmación inicial al dashboard
+            $this->notificarDashboards([
+                'tipo' => 'solicitud_equipo',
+                'accion' => $accion,
+                'equipo' => $nombre_equipo,
+                'usuario' => $usuario
+            ]);
+
+            // Llamar la API
+            $this->procesarComandoAPI($accion, $usuario, $mac, $nombre_equipo);
+            break;
+
+        default:
+            $this->log("❓ solicitud no reconocida: " . $accion);
+            break;
+    }
+    break;
+
+            case 'respuesta_solicitud':
+
+                $accionDashboard = $data['action'] ?? null;
+                $sesionId        = $data['session'] ?? null;
+
+                if (!$sesionId) {
+                    $this->log("❌ respuesta_solicitud sin sessionId");
+                    break;
+                }
+
+                // ============================================================
+                // 🔍 1. Buscar datos de la sesión en base de datos
+                // ============================================================
+                $sql = "SELECT 
+                s.id,
+                s.username,
+                s.id_equipo_fk,
+                eq.nombre_pc,
+                eq.mac_eq
+            FROM sesiones s
+            LEFT JOIN equipos eq ON eq.id_equipo = s.id_equipo_fk
+            WHERE s.id = ? LIMIT 1";
+
+                $stmt = $this->conn->prepare($sql);
+                $stmt->bind_param("i", $sesionId);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                $sesion = $result->fetch_assoc();
+                $stmt->close();
+
+                if (!$sesion) {
+                    $this->log("❌ Sesión no encontrada para ID: $sesionId");
+                    break;
+                }
+
+                // Datos clave
+                $username   = $sesion['username'];
+                $nombre_pc  = $sesion['nombre_pc'];
+                $mac_eq     = $sesion['mac_eq'];
+
+                $this->log("📌 respuesta_solicitud → Sesión encontrada: PC=$nombre_pc, usuario=$username");
+
+                // ============================================================
+                // 🔁 2. Determinar acción API según respuesta del dashboard
+                // ============================================================
+                if ($accionDashboard === "aceptar_renovacion") {
+
+                    $accionAPI = "renovar"; // Acción para API
+                    $this->log("🔁 Renovación aprobada por dashboard para $nombre_pc");
+                } elseif ($accionDashboard === "rechazar_renovacion") {
+
+                    $accionAPI = "finalizar"; // Cerrar sesión
+                    $this->log("⛔ Renovación rechazada por dashboard para $nombre_pc");
+                } else {
+                    $this->log("❓ Acción de solicitud desconocida: " . $accionDashboard);
+                    break;
+                }
+
+                // ============================================================
+                // 🌐 3. Llamar a la API → comando_api
+                // ============================================================
+                $apiPayload = [
+                    'tipo'      => 'comando_api',
+                    'accion'    => $accionAPI,
+                    'username'  => $username,
+                    'mac_eq'    => $mac_eq,
+                    'origen'    => 'server'
+                ];
+
+                $apiUrl = "http://localhost/autoprestamos/prueba_equipos/api.php";
+
+                $ch = curl_init($apiUrl);
+
+                curl_setopt_array($ch, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_POST            => true,
+                    CURLOPT_POSTFIELDS      => json_encode($apiPayload),
+                    CURLOPT_HTTPHEADER      => ['Content-Type: application/json'],
+                    CURLOPT_TIMEOUT         => 10
+                ]);
+
+                $respuestaApi = curl_exec($ch);
+                $errorCurl    = curl_error($ch);
+                curl_close($ch);
+
+                if ($errorCurl) {
+                    $this->log("❌ Error cURL API: $errorCurl");
+                    break;
+                }
+
+                $res = json_decode($respuestaApi, true);
+
+                if (!$res) {
+                    $this->log("⚠️ API devolvió respuesta inválida: $respuestaApi");
+                    break;
+                }
+
+                $estadoAPI  = $res['estado'] ?? 'SIN_RESPUESTA';
+                $msgAPI     = $res['mensaje'] ?? 'Sin mensaje';
+
+                $this->log("📡 API → [$estadoAPI] $msgAPI");
+
+                // ============================================================
+                // 📤 4. Enviar al PowerShell (si está conectado)
+                // ============================================================
+                if (isset($this->equipos[$nombre_pc])) {
+                    $this->equipos[$nombre_pc]->send(json_encode([
+                        'tipo'      => 'confirmacion_solicitud',
+                        'accion'    => $accionAPI,
+                        'estado'    => $estadoAPI,
+                        'mensaje'   => $msgAPI,
+                        'origen'    => 'server',
+                        'username'  => $username
                     ]));
                 }
+
+                // ============================================================
+                // 🔔 5. Notificar dashboards del resultado
+                // ============================================================
+                $this->notificarDashboards([
+                    'tipo'      => 'resultado_solicitud',
+                    'accion'    => $accionAPI,
+                    'estado'    => $estadoAPI,
+                    'sesionId'  => $sesionId,
+                    'nombre_pc' => $nombre_pc,
+                    'usuario'   => $username,
+                    'mensaje'   => $msgAPI,
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]);
+
                 break;
             case 'log':
                 $id = $data['id'] ?? 'Desconocido';
@@ -188,9 +476,26 @@ class DashboardServer implements MessageComponentInterface
                     }
                 }
                 break;
+            case 'confirmacion_comando':
+                $accion = $data['accion'] ?? '';
+                $estado = $data['estado'] ?? '';
+                $mensaje = $data['mensaje'] ?? '';
+                $nombre_eq = $data['nombre_equipo'] ?? 'Desconocido';
+                foreach ($this->clients as $client) {
+                    if (!isset($client->id_equipo)) {
+                        $client->send(json_encode([
+                            'tipo'      => 'proceso_comando',
+                            'nombre_eq' => $nombre_eq,
+                            'accion'    => $accion,
+                            'resultado' => $estado,
+                            'origen'    => 'server' // indicamos que lo reenvía el server
+                        ]));
+                    }
+                }
+                break;
             case 'confirmacion':
                 if ($data['origen'] == 'equipo') {
-                    $nombre_eq   = $data['nombre_eq'] ?? 'Desconocido';
+                    $nombre_eq   = $data['nombre_equipo'] ?? 'Desconocido';
                     $accion      = strtolower($data['accion'] ?? '');
                     $usuario     = $data['usuario'] ?? null;
                     $mac_eq = $data['mac_eq'] ?? null;
@@ -201,7 +506,7 @@ class DashboardServer implements MessageComponentInterface
                     foreach ($this->clients as $client) {
                         if (!isset($client->id_equipo)) {
                             $client->send(json_encode([
-                                'tipo'      => 'confirmacion',
+                                'tipo'      => 'proceso_comando',
                                 'nombre_eq' => $nombre_eq,
                                 'accion'    => $accion,
                                 'resultado' => $data['resultado'] ?? 'pendiente',
@@ -209,7 +514,7 @@ class DashboardServer implements MessageComponentInterface
                             ]));
                         }
                     }
-                    if ($resultado == 'ejecutado' && $accion != 'mensaje') {
+                    if ($resultado == 'ejecutando' && $accion != 'mensaje') {
                         // ======================================================
                         // 🧠 Llamada directa a la API (comando_api)
                         // ======================================================
@@ -219,6 +524,7 @@ class DashboardServer implements MessageComponentInterface
                             'accion'      => $accion,
                             'username'    => $usuario,
                             'mac_eq' => $mac_eq,
+                            'nombre_equipo' => $nombre_eq,
                             'origen'      => 'server' // 👈 NUEVO: indica que viene del servidor
                         ];
 
@@ -258,7 +564,7 @@ class DashboardServer implements MessageComponentInterface
                         $estado  = strtoupper($decoded['estado'] ?? 'SIN_RESPUESTA');
                         $mensaje = $decoded['mensaje'] ?? 'Sin mensaje';
 
-                        echo "📡 API respondió: [{$estado}] {$mensaje}\n";
+                        echo "📡 API respondió: [{$estado}] $nombre_eq {$mensaje}\n";
                         $this->log("📡 API → {$estado} → {$mensaje}");
 
                         // ======================================================
@@ -266,13 +572,20 @@ class DashboardServer implements MessageComponentInterface
                         // ======================================================
                         switch ($accion) {
                             case 'finalizar':
-                                if (str_contains($estado, 'FINALIZADO')) {
-                                    $this->log("✅ Check-in completado para {$nombre_eq} (acción: finalizar)");
-                                } else {
-                                    $this->log("⚠️ Fallo al finalizar sesión en {$nombre_eq}: {$mensaje}");
+                                if ($estado === 'FINALIZADO') {
+                                    if (isset($this->equipos[$nombre_eq])) {
+                                        $this->equipos[$nombre_eq]->send(json_encode([
+                                            'tipo'      => 'confirmacion_comando',
+                                            'accion'    => $accion,
+                                            'estado'    => $estado,
+                                            'mensaje'   => $mensaje,
+                                            'origen'    => 'server',
+                                            'mac_eq'    => $mac_eq,
+                                            'username'  => $usuario
+                                        ]));
+                                    }
                                 }
                                 break;
-
                             case 'bloquear':
                                 if (str_contains($estado, 'BLOQUEADO')) {
                                     $this->log("🚫 Sesión bloqueada correctamente para {$nombre_eq}");
@@ -280,15 +593,22 @@ class DashboardServer implements MessageComponentInterface
                                     $this->log("⚠️ Error al bloquear {$nombre_eq}: {$mensaje}");
                                 }
                                 break;
-
                             case 'renovar':
-                                if (str_contains($estado, 'RENOVADO')) {
-                                    $this->log("🔁 Sesión renovada correctamente para {$nombre_eq}");
-                                } else {
-                                    $this->log("⚠️ Fallo al renovar sesión en {$nombre_eq}: {$mensaje}");
+                                if ($estado === 'RENOVADO_COMANDO') {
+                                    if (isset($this->equipos[$nombre_eq])) {
+                                        $this->equipos[$nombre_eq]->send(json_encode([
+                                            'tipo'      => 'confirmacion_comando',
+                                            'accion'    => $accion,
+                                            'estado'    => "renovar",
+                                            'mensaje'   => $mensaje,
+                                            'origen'    => 'server',
+                                            'mac_eq'    => $mac_eq,
+                                            'username'  => $usuario
+                                        ]));
+                                    }
                                 }
-                                break;
-
+                            break;
+                        break;
                             default:
                                 $this->log("ℹ️ Acción no reconocida o sin manejo específico: {$accion}");
                                 break;
@@ -299,131 +619,17 @@ class DashboardServer implements MessageComponentInterface
                 }
                 break; // ← fin de case confirmacion
 
-            // ========================================
-            // 😴 HIBERNACIÓN - MONITOREO DE INACTIVIDAD
-            // ========================================
-            case 'hibernado':
-                $accion = $data['accion'] ?? null;
-                $nombre_equipo = $data['nombre_eq'] ?? null;
-                $timestamp = $data['timestamp_hibernacion'] ?? date('Y-m-d H:i:s');
-
-                if (!$nombre_equipo) {
-                    echo "⚠️ Comando hibernación sin nombre_equipo\n";
-                    break;
-                }
-
-
-                // Buscar sesión activa del equipo usando la tabla equipos y id_estado_fk
-                try {
-                    $sqlSes = "SELECT s.id AS id_sesion, eq.id_p_servicio_fk AS id_p_servicio
-                                   FROM sesiones s
-                                   LEFT JOIN equipos eq ON eq.id_equipo = s.id_equipo_fk
-                                   WHERE eq.nombre_pc = ? AND s.id_estado_fk IN (2,3,4)
-                                   LIMIT 1";
-                    $stmt = $this->conn->prepare($sqlSes);
-                    $stmt->bind_param('s', $nombre_equipo);
-                    $stmt->execute();
-                    $res = $stmt->get_result();
-                    $sesion = $res->fetch_assoc();
-
-                    if (!$sesion) {
-                        echo "⚠️ No se encontró sesión activa para {$nombre_equipo}\n";
-                        break;
-                    }
-
-                    $id_sesion = (int)$sesion['id_sesion'];
-                    $id_p_servicio = $sesion['id_p_servicio'];
-
-                    // ========================================
-                    // VALIDAR QUE ESTADO 5 (HIBERNANDO) EXISTE EN BD
-                    // ========================================
-                    $chkEstado = $this->conn->query("SELECT id_estado FROM estados WHERE id_estado = 5 LIMIT 1");
-                    if ($chkEstado && $chkEstado->num_rows === 0) {
-                        // Estado no existe, intentar insertarlo (safe: INSERT IGNORE)
-                        $this->conn->query("INSERT IGNORE INTO estados (id_estado, nombre_estado, descripcion, color) VALUES (5, 'Hibernando', 'Sesión en hibernación por inactividad', '#ffbb33')");
-                        $this->log("⚠️ Estado 'Hibernando' (id=5) fue creado automáticamente en tabla estados");
-                    }
-
-                    // ========================================
-                    // 1️⃣ Si acción es 'hibernar': actualizar estado a Hibernando (id_estado_fk = 5)
-                    // ========================================
-                    if ($accion === 'hibernar') {
-                        $update = $this->conn->prepare("UPDATE sesiones SET id_estado_fk = ? WHERE id = ?");
-                        $hibernarId = 5; // según constantes en status.php
-                        $update->bind_param('ii', $hibernarId, $id_sesion);
-                        $update->execute();
-
-                        $this->log("😴 HIBERNACIÓN INICIADA: Sesión {$id_sesion} de {$nombre_equipo}");
-
-                        // Notificar a todos los dashboards del cambio de estado
-                        $this->notificarDashboards([
-                            'tipo' => 'cambio_estado',
-                            'id_sesion' => $id_sesion,
-                            'estado_nuevo' => 'Hibernando',
-                            'nombre_equipo' => $nombre_equipo,
-                            'id_p_servicio' => $id_p_servicio,
-                            'timestamp' => $timestamp
-                        ]);
-                        $this->enviarEstadoATodos();
-                    }
-                    // ========================================
-                    // 2️⃣ Si acción es 'finalizar_por_hibernacion': cerrar sesión (id_estado_fk = 1)
-                    // ========================================
-                    elseif ($accion === 'finalizar_por_hibernacion') {
-                        $finalizarId = 1; // Finalizado
-                        $update = $this->conn->prepare("UPDATE sesiones SET id_estado_fk = ?, fecha_final_real = ? WHERE id = ?");
-                        $update->bind_param('isi', $finalizarId, $timestamp, $id_sesion);
-                        $update->execute();
-
-                        $this->log("⛔ SESIÓN FINALIZADA POR HIBERNACIÓN: {$id_sesion} de {$nombre_equipo}");
-
-                        // Llamar a la API para cerrar la sesión en FOLIO
-                        $apiUrl = "http://localhost/autoprestamos/prueba_equipos/api.php";
-                        $payload = [
-                            'tipo' => 'comando_api',
-                            'accion' => 'finalizar',
-                            'id_sesion' => $id_sesion,
-                            'razon' => 'inactividad_prolongada',
-                            'origen' => 'hibernation_monitor'
-                        ];
-
-                        $ch = curl_init($apiUrl);
-                        curl_setopt_array($ch, [
-                            CURLOPT_RETURNTRANSFER => true,
-                            CURLOPT_POST => true,
-                            CURLOPT_POSTFIELDS => json_encode($payload),
-                            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-                            CURLOPT_TIMEOUT => 10
-                        ]);
-
-                        $apiResponse = curl_exec($ch);
-                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                        curl_close($ch);
-
-                        if ($httpCode === 200) {
-                            $this->log("✅ API procesó finalización por hibernación: {$id_sesion}");
-                        } else {
-                            $this->log("⚠️ API respondió con código {$httpCode} al finalizar {$id_sesion}");
-                        }
-
-                        // Notificar a todos los dashboards del cambio de estado
-                        $this->notificarDashboards([
-                            'tipo' => 'cambio_estado',
-                            'id_sesion' => $id_sesion,
-                            'estado_nuevo' => 'Finalizado',
-                            'nombre_equipo' => $nombre_equipo,
-                            'id_p_servicio' => $id_p_servicio,
-                            'timestamp' => $timestamp,
-                            'razon' => 'hibernacion'
-                        ]);
-                        $this->enviarEstadoATodos();
-                    }
-                } catch (Exception $e) {
-                    echo "❌ Error procesando hibernación: " . $e->getMessage() . "\n";
-                    $this->log("❌ ERROR en hibernation: " . $e->getMessage());
+            case 'actualizar':
+                if ($data['origen'] == 'dashboard') {
+                    $from->tipoCliente = 'dashboard';
+                    $this->dashboards[] = $from;
+                    $this->enviarEstado($from);
+                } else if ($data['origen'] == 'equipo') {
+                    $from->tipoCliente = 'equipo';
+                    $this->equipos[] = $from;
+                    $this->enviarEstado($from);
                 }
                 break;
-
             // ========================================
             default:
                 echo "❓ Tipo de mensaje desconocido: " . json_encode($data) . "\n";
@@ -438,18 +644,27 @@ class DashboardServer implements MessageComponentInterface
     {
         $this->clients->detach($conn);
 
-        // Eliminar de equipos si corresponde
-        if ($conn->tipoCliente === 'equipo' && $conn->idCliente) {
-            unset($this->equipos[$conn->idCliente]);
-            $this->log("🔌 Equipo desconectado: {$conn->idCliente}");
 
-            // Notificar a dashboards
-            $this->notificarDashboards([
-                'tipo' => 'equipo_desconectado',
-                'id' => $conn->idCliente,
-                'timestamp' => date('Y-m-d H:i:s')
-            ]);
+        // Eliminar de equipos si corresponde
+        if ($conn->tipoCliente === 'equipo' && !empty($conn->idCliente)) {
+            if (isset($this->equipos[$conn->idCliente])) {
+                unset($this->equipos[$conn->idCliente]);
+                $this->log("🔌 Equipo desconectado: {$conn->idCliente}");
+
+                // Notificar a dashboards
+                $payload = [
+                    'tipo' => 'equipo_desconectado',
+                    'id' => $conn->idCliente,
+                    'timestamp' => date('Y-m-d H:i:s')
+                ];
+
+                $this->log("📢 Notificando dashboards: " . json_encode($payload));
+                $this->notificarDashboards($payload);
+            } else {
+                $this->log("⚠️ Intento de desconexión de equipo no registrado: {$conn->idCliente}");
+            }
         }
+
 
         // Eliminar de dashboards si corresponde
         if ($conn->tipoCliente === 'dashboard') {
@@ -462,7 +677,6 @@ class DashboardServer implements MessageComponentInterface
 
         $this->log("🔴 Cliente desconectado: ({$conn->resourceId})");
     }
-
     // ============================================================
     // ⚠️ MANEJO DE ERRORES
     // ============================================================
@@ -479,14 +693,15 @@ class DashboardServer implements MessageComponentInterface
     {
         $mensaje = json_encode($payload);
         foreach ($this->dashboards as $dashboard) {
-            try {
-                $dashboard->send($mensaje);
-            } catch (\Exception $e) {
-                $this->log("❌ Error al notificar dashboard: {$e->getMessage()}");
+            if ($dashboard && method_exists($dashboard, 'send')) { // Validar objeto
+                try {
+                    $dashboard->send($mensaje);
+                } catch (\Exception $e) {
+                    $this->log("❌ Error al notificar dashboard: {$e->getMessage()}");
+                }
             }
         }
     }
-
     // ============================================================
     // 💾 GUARDAR LOG EN BASE DE DATOS
     // ============================================================
@@ -502,7 +717,6 @@ class DashboardServer implements MessageComponentInterface
             $this->log("❌ Error al guardar log: {$e->getMessage()}");
         }
     }
-
     // ============================================================
     // 📊 ENVIAR ESTADO A UN CLIENTE
     // ============================================================
@@ -578,6 +792,85 @@ class DashboardServer implements MessageComponentInterface
             $this->log("⚠️ Destino '$destino' no conectado");
         }
     }
+    private function getPuntoServicioPorEquipo(string $nombreEquipo)
+    {
+        $puntoServicio = null;
+        $sql = "SELECT ps.id_p_servicio, ps.nombre_p_servicio 
+            FROM equipos e
+            LEFT JOIN puntos_servicios ps ON e.id_p_servicio_fk = ps.id_p_servicio
+            WHERE e.nombre_pc = ?";
+        $stmt = $this->conn->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param('s', $nombreEquipo);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($row = $result->fetch_assoc()) {
+                $puntoServicio = [
+                    'id' => $row['id_p_servicio'],
+                    'nombre' => $row['nombre_p_servicio']
+                ];
+            }
+            $stmt->close();
+        }
+        return $puntoServicio;
+    }
+
+private function procesarComandoAPI($accion, $usuario, $mac, $nombreEquipo)
+{
+    $payload = [
+        'tipo' => 'comando_api',
+        'accion' => $accion,
+        'username' => $usuario,
+        'mac_eq' => $mac,
+        'origen' => 'server'
+    ];
+
+    $apiUrl = "http://localhost/autoprestamos/prueba_equipos/api.php";
+    $ch = curl_init($apiUrl);
+
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST            => true,
+        CURLOPT_POSTFIELDS      => json_encode($payload),
+        CURLOPT_HTTPHEADER      => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT         => 10
+    ]);
+
+    $respuesta = curl_exec($ch);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($error) {
+        $this->log("❌ Error API ($accion): $error");
+        return;
+    }
+
+    $res = json_decode($respuesta, true);
+
+    $estado = $res['estado'] ?? 'SIN_RESPUESTA';
+    $mensaje = $res['mensaje'] ?? 'Sin mensaje';
+
+    $this->log("📡 API ($accion) → [$estado] $mensaje");
+
+    // Enviar al equipo si está conectado
+    if (isset($this->equipos[$nombreEquipo])) {
+        $this->equipos[$nombreEquipo]->send(json_encode([
+            'tipo' => 'confirmacion_comando',
+            'accion' => $accion,
+            'estado' => $estado,
+            'mensaje' => $mensaje
+        ]));
+    }
+
+    // Notificar dashboards
+    $this->notificarDashboards([
+        'tipo' => 'proceso_comando',
+        'accion' => $accion,
+        'equipo' => $nombreEquipo,
+        'estado' => $estado,
+        'mensaje' => $mensaje
+    ]);
+}
 
     // ============================================================
     // 📈 OBTENER ESTADÍSTICAS
@@ -604,6 +897,57 @@ class DashboardServer implements MessageComponentInterface
         }
         return $stats;
     }
+private function procesarSolicitudRenovacion($nombreEquipo)
+{
+                        $idEquipo = null;
+                    $sessionId = null;
+    // 1. Buscar ID del equipo
+    $stmt = $this->conn->prepare("
+        SELECT id_equipo
+        FROM equipos
+        WHERE nombre_pc = ?
+        LIMIT 1
+    ");
+    $stmt->bind_param("s", $nombreEquipo);
+    $stmt->execute();
+    $stmt->bind_result($idEquipo);
+    $stmt->fetch();
+    $stmt->close();
+
+    if (!$idEquipo) {
+        $this->log("❌ No existe equipo '$nombreEquipo'");
+        return;
+    }
+
+    // 2. Última sesión abierta
+    $stmt = $this->conn->prepare("
+        SELECT id
+        FROM sesiones
+        WHERE id_equipo_fk = ?
+        ORDER BY id DESC
+        LIMIT 1
+    ");
+    $stmt->bind_param("i", $idEquipo);
+    $stmt->execute();
+    $stmt->bind_result($sessionId);
+    $stmt->fetch();
+    $stmt->close();
+
+    if (!$sessionId) {
+        $this->log("❌ No se encontró sesión activa para $nombreEquipo");
+        return;
+    }
+
+    // 3. Notificar dashboards
+    $payload = [
+        'tipo' => 'solicitud_renovacion',
+        'equipo' => $nombreEquipo,
+        'sessionId' => $sessionId,
+        'timestamp' => date("Y-m-d H:i:s")
+    ];
+
+    $this->notificarDashboards($payload);
+}
 
     // ============================================================
     // 🧾 LOG EN CONSOLA

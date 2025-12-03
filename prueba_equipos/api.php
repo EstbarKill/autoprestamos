@@ -13,7 +13,7 @@ require 'status.php';
 date_default_timezone_set('America/Bogota');
 
 // ================== CONFIGURACIÓN ==================
-$intervaloTiempo  = 90; // ABIERTO (s)
+$intervaloTiempo  = 30; // ABIERTO (s)
 $tiempoSuspendido = 30; // SUSPENDIDO (s)
 $esperaBloqueo    = 10; // BLOQUEADO (s)
 $claveCorrecta    = "S1m0n_2025";
@@ -31,7 +31,6 @@ $tipo = $input['tipo'] ?? $_POST['tipo']   ?? null;
 $user_comando  = $input['user_comando'] ?? $_POST['user_comando'] ?? null;
 $accion = $input['accion'] ?? $_POST['accion'] ?? null;
 $origen = $input['origen'] ?? $_POST['origen'] ?? null;
-$timestamp = $input['timestamp_hibernacion'] ?? $_POST['timestamp'] ?? null;
 
 
 if (!$username || !$mac_address) jsonError("Faltan parámetros: username e mac_address");
@@ -110,9 +109,10 @@ switch ($tipo) {
                         exit;
                         break;
                     case ESTADO_SUSPENDIDO:
+                        $finSuspension = ($fechaProg ? clone $fechaProg : $now)->modify("+" . $tiempoSuspendido . " seconds");
                         if ($clave_admin) {
                             if ($clave_admin == $claveCorrecta) {
-                                actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
+                                actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'),$finSuspension->format("Y-m-d H:i:s"));
                                 $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
                                 $sesion_id = crearSesion($conn, $userId, $username_full, $id_equipo, $intervaloTiempo);
                                 $checkoutResp = folioCheckout($token, $folio_item_barcode, $userBarcode, $servicePointId);
@@ -128,7 +128,14 @@ switch ($tipo) {
                                 exit;
                             }
                         } elseif ($cancel_suspend == "Cancelar" or $cancel_suspend or "Expirado" or $cancel_suspend == "Intentos") {
-                            actualizarEstado($conn, $last['id'], ESTADO_BLOQUEADO, $now->format('Y-m-d H:i:s'));
+                            actualizarEstado(
+                                $conn,
+                                $sesionId,
+                                ESTADO_BLOQUEADO,
+                                null,
+                                $now->format("Y-m-d H:i:s"),             // bloqueado_desde
+                                $finSuspension->format("Y-m-d H:i:s")         // bloqueado_hasta
+                            );
                             $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
                             $motivo = match ($cancel_suspend) {
                                 "Cancelar" => "Sesión cancelada → Bloqueada",
@@ -139,9 +146,15 @@ switch ($tipo) {
                             jsonOk(["estado" => "Bloqueado", "mensaje" => $motivo]);
                             exit;
                         } else {
-                            $finSuspension = ($fechaProg ? clone $fechaProg : $now)->modify("+" . $tiempoSuspendido . " seconds");
                             if ($now >= $finSuspension) {
-                                actualizarEstado($conn, $last['id'], ESTADO_BLOQUEADO, $now->format('Y-m-d H:i:s'));
+                                actualizarEstado(
+                                    $conn,
+                                    $sesionId,
+                                    ESTADO_BLOQUEADO,
+                                    null,
+                                    $now->format("Y-m-d H:i:s"),             // bloqueado_desde
+                                    $finSuspension->format("Y-m-d H:i:s")         // bloqueado_hasta
+                                );
                                 $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
                                 jsonOk(["estado" => "Bloqueado", "mensaje" => "Usuario bloqueado por no reactivar a tiempo"]);
                                 exit;
@@ -149,32 +162,53 @@ switch ($tipo) {
                         }
                         break;
                     case ESTADO_BLOQUEADO:
-                        // Obtener el tiempo en que fue bloqueada
-                        $fechaBloqueo = isset($last['fecha_final_real']) && !empty($last['fecha_final_real'])
-                            ? new DateTime($last['fecha_final_real'], new DateTimeZone('America/Bogota'))
-                            : $now;
 
-                        // Calcular tiempo de espera real desde el bloqueo
-                        $finBloqueo = clone $fechaBloqueo;
-                        $finBloqueo->modify("+" . $esperaBloqueo . " seconds");
+                        // 1. Tomamos la fecha en que inició el bloqueo
+                        $bloqueadoDesde = isset($last['bloqueado_desde']) ? new DateTime($last['bloqueado_desde'], new DateTimeZone('America/Bogota')) : null;
+                        $bloqueadoHasta = isset($last['bloqueado_hasta']) ? new DateTime($last['bloqueado_hasta'], new DateTimeZone('America/Bogota')) : null;
+                        $finSuspension = ($fechaProg ? clone $fechaProg : $now)->modify("+" . $tiempoSuspendido . " seconds");
+                        // Seguridad: si faltan datos del bloqueo, finalizamos de una vez
+                        if ($bloqueadoDesde === null || $bloqueadoHasta === null) {
+                            actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $finSuspension->format('Y-m-d H:i:s'));
 
-                        // Comparar y actualizar si corresponde
-                        if ($now >= $finBloqueo) {
-                            actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
-                            $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
                             jsonOk([
                                 "estado" => "Finalizado",
-                                "mensaje" => "Sesión finalizada automáticamente después del bloqueo"
-                            ]);
-                            exit;
-                        } else {
-                            $restante = $finBloqueo->getTimestamp() - $now->getTimestamp();
-                            jsonOk([
-                                "estado" => "Bloqueado",
-                                "mensaje" => "Sesión bloqueada en espera de finalización"
+                                "mensaje" => "La sesión estaba en bloqueo pero sin datos completos. Finalizada por seguridad."
                             ]);
                             exit;
                         }
+
+                        // 2. Verificar si YA PASÓ el tiempo de bloqueo
+                        if ($now >= $bloqueadoHasta) {
+
+                            // Finalizar automáticamente
+                            actualizarEstado(
+                                $conn,
+                                $last['id'],
+                                ESTADO_FINALIZADO,
+                                $now->format('Y-m-d H:i:s')
+                            );
+
+                            // Registrar checkin en FOLIO
+                            $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
+
+                            jsonOk([
+                                "estado" => "Finalizado",
+                                "mensaje" => "Sesión finalizada automáticamente después de bloqueo."
+                            ]);
+                            exit;
+                        }
+
+                        // 3. Si aún está dentro del tiempo de bloqueo
+                        $restante = $bloqueadoHasta->getTimestamp() - $now->getTimestamp();
+
+                        jsonOk([
+                            "estado" => "Bloqueado",
+                            "tiempo_restante" => $restante,
+                            "mensaje" => "Sesión bloqueada en cuenta regresiva."
+                        ]);
+                        exit;
+
                         break;
 
                     case ESTADO_FINALIZADO:
@@ -210,31 +244,6 @@ switch ($tipo) {
                             jsonOk(["estado" => "Abierto", "mensaje" => "Su sesion comenzará en breve"]);
                         }
                         break;
-                    case ESTADO_HIBERNANDO:
-    // Calcula cuándo debe terminar la hibernación
-    $inicioHibernacion = isset($last['fecha_final_programada'])
-        ? new DateTime($last['fecha_final_programada'], new DateTimeZone('America/Bogota'))
-        : $now;
-    $finHibernacion = clone $inicioHibernacion;
-    $finHibernacion->modify('+10 minutes'); // o el tiempo máximo que definas
-
-    if ($now >= $finHibernacion) {
-        actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
-        $checkInResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-        jsonOk([
-            "estado" => "Finalizado",
-            "mensaje" => "Sesión finalizada automáticamente tras hibernación prolongada"
-        ]);
-        exit;
-    } else {
-        jsonOk([
-            "estado" => "Hibernando",
-            "mensaje" => "Sesión en modo hibernación (inactiva temporalmente)"
-        ]);
-        exit;
-    }
-    break;
-
                     default:
                         jsonOk(["estado" => "Error", "mensaje" => "Flujo no reconocido en estado Suspendido"]);
                         exit;
@@ -252,8 +261,10 @@ switch ($tipo) {
             // 🧾 Datos esperados desde server.php
             // ============================================================
             $accion       = strtolower($accion ?? '');
+            $resultado       = strtolower($resultado ?? 'resultado');
             $username     = $username ?? null;
             $mac_address  = $mac_address ?? null;
+            $nombre_eq   = $input['nombre_equipo'] ?? null;
             $now          = new DateTime('now', new DateTimeZone('America/Bogota'));
 
             // ============================================================
@@ -273,7 +284,6 @@ switch ($tipo) {
             // ⚙️ Lógica según acción solicitada
             // ============================================================
             switch ($accion) {
-
                 // ------------------------------------------------------------
                 // 🔚 FINALIZAR → Check-in en FOLIO + marcar sesión finalizada
                 // ------------------------------------------------------------
@@ -287,11 +297,13 @@ switch ($tipo) {
                         if ($ultimaSesion) {
                             actualizarEstado($conn, $ultimaSesion['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
                         }
-
                         jsonOk([
                             "tipo" => "confirmacion_comando",
                             "accion" => $accion,
-                            "estado"  => "Finalizado_comando",
+                            "estado"  => "FINALIZADO",
+                            "resultado" => $resultado,
+                            "nombre_usuario" => $username_full,
+                            "nombre_equipo" => $nombre_eq,
                             "mensaje" => "Check-in completado correctamente en FOLIO y sesión finalizada."
                         ]);
                     } else {
@@ -299,25 +311,26 @@ switch ($tipo) {
                         jsonOk([
                             "tipo" => "confirmacion_comando",
                             "accion" => $accion,
-                            "estado"  => "Error_comando",
+                            "estado"  => "ERROR",
+                            "resultado" => $resultado,
+                            "nombre_usuario" => $username_full,
+                            "nombre_equipo" => $nombre_eq,
                             "mensaje" => "Fallo al realizar check-in: {$errorMsg}"
                         ]);
                     }
                     break;
-
                 // ------------------------------------------------------------
                 // 🔁 RENOVAR → Check-in + nueva sesión (checkout)
                 // ------------------------------------------------------------
                 case 'renovar':
+                    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
                     // Primero cerrar sesión actual con un check-in
                     $checkinResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-                    $ok1 = isset($checkinResp['status']) && $checkinResp['status'] >= 200 && $checkinResp['status'] < 300;
-
+                    actualizarEstado($conn, $last['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
                     // Luego iniciar nueva sesión (checkout)
                     $checkoutResp = folioCheckout($token, $folio_item_barcode, $userBarcode, $servicePointId);
-                    $ok2 = isset($checkoutResp['status']) && $checkoutResp['status'] >= 200 && $checkoutResp['status'] < 300;
 
-                    if ($ok1 && $ok2) {
+                    if ($checkinResp && $checkoutResp) {
                         $nuevaSesion = crearSesion($conn, $userId, $username_full, $id_equipo, $intervaloTiempo);
                         jsonOk([
                             "estado"  => "Renovado_comando",
@@ -326,7 +339,7 @@ switch ($tipo) {
                     } else {
                         jsonOk([
                             "estado"  => "Error_renovacion",
-                            "mensaje" => "No se pudo renovar correctamente la sesión. Revise conexión con FOLIO."
+                            "mensaje" => "No se pudo renovar correctamente la sesión. Revise conexión con FOLIO. $ok1"
                         ]);
                     }
                     break;
@@ -343,7 +356,6 @@ switch ($tipo) {
                         if ($ultimaSesion) {
                             actualizarEstado($conn, $ultimaSesion['id'], ESTADO_BLOQUEADO, $now->format('Y-m-d H:i:s'));
                         }
-
                         jsonOk([
                             "estado"  => "Bloqueado_comando",
                             "mensaje" => "Sesión bloqueada y check-in completado correctamente."
@@ -356,35 +368,6 @@ switch ($tipo) {
                         ]);
                     }
                     break;
-case 'hibernar':
-    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
-    if ($ultimaSesion) {
-        actualizarEstado($conn, $ultimaSesion['id'], ESTADO_HIBERNANDO, $now->format('Y-m-d H:i:s'));
-        jsonOk([
-            "estado"  => "Hibernando_comando",
-            "mensaje" => "Sesión puesta en modo hibernación por inactividad.",
-            "timestamp_hibernacion"=> $timestamp
-        ]);
-    } else {
-        jsonOk(["estado" => "Error", "mensaje" => "No se encontró sesión activa para hibernar."]);
-    }
-    break;
-
-case 'finalizar_por_hibernacion':
-    $ultimaSesion = getUltimaSesion($conn, $userId, $id_equipo);
-    if ($ultimaSesion) {
-        actualizarEstado($conn, $ultimaSesion['id'], ESTADO_FINALIZADO, $now->format('Y-m-d H:i:s'));
-        $checkinResp = folioCheckin($token, $folio_item_barcode, $servicePointId);
-        jsonOk([
-            "estado"  => "Finalizado_comando",
-            "mensaje" => "Sesión finalizada automáticamente por hibernación prolongada.",
-            "timestamp_hibernacion"=> $timestamp
-        ]);
-    } else {
-        jsonOk(["estado" => "Error", "mensaje" => "No se encontró sesión para finalizar por hibernación."]);
-    }
-    break;
-
                 // ------------------------------------------------------------
                 // ❓ Acción desconocida
                 // ------------------------------------------------------------
@@ -398,7 +381,7 @@ case 'finalizar_por_hibernacion':
 
             break; // Fin del case comando_api
         } else if ($origen == "equipo") {
-            
+
             // ============================================================
             // 🧠 Validaciones iniciales
             // ============================================================
@@ -431,6 +414,7 @@ case 'finalizar_por_hibernacion':
                 }
             }
         }
+        break;
     default:
         # code...
         break;
