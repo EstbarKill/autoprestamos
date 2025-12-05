@@ -3,11 +3,11 @@ include '../config/db.php';
 header('Content-Type: application/json');
 
 // Obtener parámetro de filtro por punto de servicio
-$id_p_servicio = isset($_GET['id_p_servicio']) ? (int)$_GET['id_p_servicio'] : null;
+$id_p_servicio = isset($_GET['id_p_servicio_fk']) ? (int)$_GET['id_p_servicio_fk'] : null;
 
 // Construir query con LEFT JOIN a equipos para obtener nombre_pc
 // Incluir id_p_servicio del equipo para permitir filtrado en el cliente
-$sql = "SELECT s.id, s.username, s.id_equipo_fk, eq.nombre_pc, eq.id_p_servicio_fk AS id_p_servicio, s.fecha_inicio, s.fecha_final_programada, s.fecha_final_real, e.nombre_estado
+$sql = "SELECT s.id, s.username, s.id_equipo_fk, eq.nombre_pc, eq.id_p_servicio_fk AS id_p_servicio, s.fecha_inicio, s.fecha_final_programada, s.fecha_final_real,s.bloqueado_hasta, e.nombre_estado
         FROM sesiones s
         LEFT JOIN equipos eq ON eq.id_equipo = s.id_equipo_fk
         LEFT JOIN estados e ON e.id_estado = s.id_estado_fk";

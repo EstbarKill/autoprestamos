@@ -103,9 +103,12 @@ window.conectarWS = async function () {
               // Mensajes del sistema: registrar en log, evitar toasts para reducir ruido
               agregarLog("💬 " + (data.texto || data.mensaje), "info");
               break;
+            // ============================================
+            // 📋 LOG DEL SERVIDOR
+            // ============================================
             case "log":
-              agregarLog(data.mensaje, "success");
-              break;
+                agregarLog(data.mensaje || "Log del servidor", "info");
+                break;
             case "confirmacion_comando":
               agregarLog(`⚙️ Confiramcion '${data.accion}' estado en ${data.estado}`, "info");
               break;
@@ -117,12 +120,14 @@ window.conectarWS = async function () {
               // Registrar en log; si es necesario, dashboard puede mostrar resumen
               agregarLog(`🔌 Equipo desconectado: ${data.id}`, "warning");
               break;
+            case "estado_cambiado":
+              agregarLog(`🔄 Estado cambiado: ${data.nombre_eq} a ${data.nuevo_estado}`, "info");
+              break;
             case "confirmacion":
               nombre_eq = data.nombre_eq;
               accionSesion = data.accion;
               resultadoSesion = data.resultado;
               origen = data.origen;
-              usuario = data.usuario;
               if (origen == "server") {
                 // Confirmaciones desde el servidor: mostrar toast para acciones críticas
                 if (data.accion === 'finalizar' || data.accion === 'bloquear') {
@@ -148,23 +153,50 @@ window.conectarWS = async function () {
               agregarLog(`🖥️ Equipos conectados: ${data.cantidad}`, "info");
               break;
             case "confirmacion_registro":
-              usuario = data.usuario;
-              // Registrar en log; no mostrar toast para registro automático
-              if(usuario == "dashboard"){
-                  agregarLog(`✅ Dashboard en linea: ${data.nombre_equipo}`, "success");
-                  mostrarToast(`✅ Dashboard en linea: ${data.nombre_equipo}`, "success");
-              }else if(usuario == "equipo"){
-                 agregarLog(`✅ Equipo en linea: ${data.nombre_equipo}`, "success");
-                mostrarToast(`✅ Dashboard en linea: ${data.nombre_equipo}`, "success");
-              }
+              $usuario = data.usuario || "Desconocido";
+                  agregarLog(`✅ ${$usuario} en linea: ${data.nombre_equipo}`, "success");
+                  mostrarToast(`✅ ${$usuario} en linea: ${data.nombre_equipo}`, "success");
               break;
             case "proceso_comando":
                   agregarLog(`✅ Proceso comando: ${data.accion} Resultado ${data.resultado}`, "success");
                   mostrarToast(`✅ Proceso comando: ${data.accion} Resultado ${data.resultado}`, "success");
                   break;
             case "solicitud":
-                agregarLog(`Solicitud de renovación del PC ${data.nombre_equipo}`, "info");
-                agregarSolicitud(data.nombre_equipo, data.sessionId);
+                $usuario = data.usuario || "Desconocido";
+                $accionSolicitud = data.accion || "desconocida";
+                $nombreEq = data.nombre_equipo || data.equipo || "Desconocido";
+                $sessionId = data.sessionId;
+                
+                if (accionSolicitud === "solicitar_renovacion" && sessionId) {
+                    agregarSolicitud(nombreEq, sessionId, usuario);
+                    agregarLog(`📨 ${nombreEq}: ${accionSolicitud}`, "info");
+                    mostrarToast(`📨 ${nombreEq}: ${accionSolicitud}`, "info");
+                } else {
+                    // Otras solicitudes (cerrar, expirado, etc.)
+                    agregarLog(`📨 ${nombreEq}: ${accionSolicitud}`, "info");
+                    mostrarToast(`📨 ${nombreEq}: ${accionSolicitud}`, "info");
+                }
+                break;
+                // ============================================
+            // ✅ RESULTADO DE SOLICITUD PROCESADA
+            // ============================================
+            case "resultado_solicitud":
+                const resultadoAccion = data.accion;
+                const resultadoEstado = data.estado;
+                const resultadoEquipo = data.nombre_pc;
+                const resultadoMensaje = data.mensaje;
+                
+                agregarLog(
+                    `✅ ${resultadoEquipo}: ${resultadoAccion} → ${resultadoEstado}`,
+                    resultadoEstado.includes("Error") ? "error" : "success"
+                );
+                
+                // Actualizar tabla de sesiones
+                setTimeout(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ tipo: "actualizar", origen: "dashboard" }));
+                    }
+                }, 1000);
                 break;
             default:
               console.log("📡 Mensaje no manejado:", data);
@@ -246,6 +278,37 @@ window.conectarWS = async function () {
     return false;
   }
 };
+// ============================================================
+// AUTO-LIMPIEZA DE SOLICITUDES ANTIGUAS
+// ============================================================
+setInterval(() => {
+    const tabla = document.querySelector("#tablaSolicitudes tbody");
+    if (!tabla) return;
+    
+    const filas = Array.from(tabla.querySelectorAll("tr[data-session-id]"));
+    const ahora = Date.now();
+    const TIMEOUT = 5 * 60 * 1000; // 5 minutos
+    
+    filas.forEach(fila => {
+        const horaTexto = fila.querySelector("td:nth-child(2)")?.textContent;
+        if (!horaTexto) return;
+        
+        try {
+            const [h, m, s] = horaTexto.split(":").map(Number);
+            const horaSolicitud = new Date();
+            horaSolicitud.setHours(h, m, s, 0);
+            
+            if (ahora - horaSolicitud.getTime() > TIMEOUT) {
+                fila.remove();
+                agregarLog(`⏰ Solicitud antigua eliminada: ${fila.dataset.nombreEquipo}`, "warning");
+            }
+        } catch (e) {
+            // Ignorar errores de parsing
+        }
+    });
+    
+    verificarTablaVacia();
+}, 60000); // Cada minuto
 
 // Heartbeat: pedir estado cada HEARTBEAT_INTERVAL
 setInterval(() => {

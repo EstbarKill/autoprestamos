@@ -20,6 +20,7 @@ $Global:Config = @{
     ClaveAdmin        = "S1m0n_2025"
     MaxReintentos     = 5
     TiempoReintento   = 3
+    
 }
 
 # Variables de sincronización entre procesos
@@ -207,7 +208,9 @@ function Start-WebSocketProcess {
                             tipo = "registro"
                             accion = "getRegistro"
                             origen = "equipo"
+                            username = $Config.Username
                             nombre_equipo = $Config.IdEquipo
+                            mac_address = $SharedState.MacAddress
                         }
                         if ($registrado) {
                             Write-WSLog "📝 Cliente registrado: $($Config.IdEquipo)" -Tipo Success
@@ -233,88 +236,127 @@ function Start-WebSocketProcess {
             return $null
         }
 
-        function Start-WSListener {
-            param($WsClient)
-            Write-WSLog "👂 Iniciando escucha continua de mensajes..." -Tipo Success
-            $buffer = New-Object Byte[] 8192
+    function Start-WSListener {
+        param($WsClient)
+        Write-WSLog "👂 Iniciando escucha continua de mensajes..." -Tipo Success
+        $buffer = New-Object Byte[] 8192
 
-            while ($WsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open -and $SharedState.SessionActive) {
-                # Procesar cola de mensajes salientes (si existen)
-                try {
-                    while ($SharedState.ContainsKey('OutgoingQueue') -and $SharedState.OutgoingQueue.Count -gt 0) {
-                        $out = $SharedState.OutgoingQueue.Dequeue()
-                        Send-WSMessage -WsClient $WsClient -Payload $out | Out-Null
-                    }
+        while ($WsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open -and $SharedState.SessionActive) {
+            # Procesar cola de mensajes salientes
+            try {
+                while ($SharedState.ContainsKey('OutgoingQueue') -and $SharedState.OutgoingQueue.Count -gt 0) {
+                    $out = $SharedState.OutgoingQueue.Dequeue()
+                    Send-WSMessage -WsClient $WsClient -Payload $out | Out-Null
                 }
-                catch { }
+            } catch { }
 
-                try {
-                    $result = $WsClient.ReceiveAsync([ArraySegment[byte]]$buffer, [Threading.CancellationToken]::None).Result
-                    if ($result.Count -gt 0) {
-                        $mensaje = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
-                        Write-WSLog "📩 Recibido: $mensaje" -Tipo Info
-                        try {
-                            $data = $mensaje | ConvertFrom-Json
-                            if ($data.origen -ne "server") {
-                                Write-WSLog "⛔ Origen no autorizado: $($data.origen)" -Tipo Warning
-                                continue
-                            }
-                            if ($data.tipo -eq "ping") {
-                                Send-WSMessage -WsClient $WsClient -Payload @{
-                                    tipo = "pong"
-                                    id = $Config.IdEquipo
-                                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-                                } | Out-Null
-                                Write-WSLog "🏓 Pong enviado" -Tipo Info
-                                continue
-                            }
-                            $SharedState.CommandQueue.Enqueue($data)
-                            $SharedState.LastMessage = $mensaje
-                            Write-WSLog "✅ Encolado: $($data.tipo) - $($data.accion)" -Tipo Success
-                        } catch {
-                            Write-WSLog "⚠️ Error JSON: $_" -Tipo Warning
+            try {
+                $result = $WsClient.ReceiveAsync([ArraySegment[byte]]$buffer, [Threading.CancellationToken]::None).Result
+                
+                if ($result.Count -gt 0) {
+                    $mensaje = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+                    Write-WSLog "📩 Recibido: $mensaje" -Tipo Info
+                    
+                    try {
+                        $data = $mensaje | ConvertFrom-Json
+                        
+                        # Validar origen
+                        if ($data.origen -ne "server") {
+                            Write-WSLog "⛔ Origen no autorizado: $($data.origen)" -Tipo Warning
+                            continue
                         }
+                        
+                        # ============================================================
+                        # 🎯 MANEJO ESPECIAL DE RESPUESTA DE ESTADO
+                        # ============================================================
+                        if ($data.tipo -eq "respuesta_estado") {
+                            Write-WSLog "📊 Respuesta de estado recibidaa: $($data.estado)" -Tipo Success
+                            $SharedState.CommandQueue.Enqueue($data)
+                            continue
+                        }
+                        
+                        # ============================================================
+                        # 🎯 MANEJO DE CONFIRMACIÓN DE REGISTRO
+                        # ============================================================
+                        if ($data.tipo -eq "confirmacion_registro") {
+                            Write-WSLog "✅ Registro confirmado por servidor" -Tipo Success
+                            # Si viene con respuesta_estado incluida, también encolarla
+                            if ($data.estado) {
+                                $SharedState.CommandQueue.Enqueue($data)
+                            }
+                            continue
+                        }
+                        
+                        # Ping/Pong
+                        if ($data.tipo -eq "ping") {
+                            Send-WSMessage -WsClient $WsClient -Payload @{
+                                tipo = "pong"
+                                id = $Config.IdEquipo
+                                timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                            } | Out-Null
+                            Write-WSLog "🏓 Pong enviado" -Tipo Info
+                            continue
+                        }
+                        
+                        # Otros mensajes
+                        $SharedState.CommandQueue.Enqueue($data)
+                        $SharedState.LastMessage = $mensaje
+                        Write-WSLog "✅ Encolado: $($data.tipo) - $($data.accion)" -Tipo Success
+                        
+                    } catch {
+                        Write-WSLog "⚠️ Error JSON: $_" -Tipo Warning
                     }
-                } catch {
-                    Write-WSLog "❌ Error escucha: $_" -Tipo Error
-                    break
                 }
-                try {
-                    if ($SharedState.ContainsKey('OutgoingSignal') -and $SharedState.OutgoingSignal) {
-                        # Espera hasta que haya una señal de salida o hasta 100ms
-                        $null = $SharedState.OutgoingSignal.WaitOne(100)
-                    } else {
-                        Start-Sleep -Milliseconds 100
-                    }
-                } catch { Start-Sleep -Milliseconds 100 }
+            } catch {
+                Write-WSLog "❌ Error escucha: $_" -Tipo Error
+                break
             }
-            Write-WSLog "⚠️ Listener finalizado. Estado: $($WsClient.State)" -Tipo Warning
-        }
-
-        # BUCLE PRINCIPAL WS
-        Write-WSLog "🚀 Proceso WebSocket iniciado" -Tipo Success
-        while ($SharedState.SessionActive) {
-            $ws = Connect-WSClient -MaxReintentos 5
-            if ($ws) {
-                Start-WSListener -WsClient $ws
-                try {
-                    if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-                        $ws.CloseAsync('NormalClosure', 'Reconexión', [Threading.CancellationToken]::None).Wait(2000)
-                    }
-                    $ws.Dispose()
-                } catch {
-                    Write-WSLog "⚠️ Error al cerrar: $_" -Tipo Warning
+            
+            # Espera con señal
+            try {
+                if ($SharedState.ContainsKey('OutgoingSignal') -and $SharedState.OutgoingSignal) {
+                    $null = $SharedState.OutgoingSignal.WaitOne(100)
+                } else {
+                    Start-Sleep -Milliseconds 100
                 }
-                $SharedState.WebSocketConnected = $false
-                $SharedState.WSClientReference = $null
-            }
-            if ($SharedState.SessionActive) {
-                Write-WSLog "🔄 Reintentando en 5 segundos..." -Tipo Warning
-                Start-Sleep -Seconds 5
+            } catch {
+                Start-Sleep -Milliseconds 100
             }
         }
-        Write-WSLog "🛑 Proceso WebSocket finalizado" -Tipo Info
+        
+        Write-WSLog "⚠️ Listener finalizado. Estado: $($WsClient.State)" -Tipo Warning
     }
+
+    # BUCLE PRINCIPAL WS
+    Write-WSLog "🚀 Proceso WebSocket iniciado" -Tipo Success
+    
+    while ($SharedState.SessionActive) {
+        $ws = Connect-WSClient -MaxReintentos 5
+        
+        if ($ws) {
+            Start-WSListener -WsClient $ws
+            
+            try {
+                if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                    $ws.CloseAsync('NormalClosure', 'Reconexión', [Threading.CancellationToken]::None).Wait(2000)
+                }
+                $ws.Dispose()
+            } catch {
+                Write-WSLog "⚠️ Error al cerrar: $_" -Tipo Warning
+            }
+            
+            $SharedState.WebSocketConnected = $false
+            $SharedState.WSClientReference = $null
+        }
+        
+        if ($SharedState.SessionActive) {
+            Write-WSLog "🔄 Reintentando en 5 segundos..." -Tipo Warning
+            Start-Sleep -Seconds 5
+        }
+    }
+    
+    Write-WSLog "🛑 Proceso WebSocket finalizado" -Tipo Info
+}
 
     $Global:WebSocketPowerShell.AddScript($wsScript) | Out-Null
     $Global:WebSocketPowerShell.BeginInvoke() | Out-Null
@@ -423,11 +465,11 @@ function Invoke-AccionControl {
 
     function Send-Confirmacion {
         param([string]$Resultado, [string]$Mensaje)
-        $payload = @{
+            $payload = @{
             tipo = "confirmacion"
             origen = "equipo"
             usuario = $env:USERNAME
-            mac_eq = $Global:SharedState.MacAddress
+            mac_address = $Global:SharedState.MacAddress
             nombre_equipo = $Global:Config.IdEquipo
             accion = $Accion
             resultado = $Resultado
@@ -442,7 +484,7 @@ function Invoke-AccionControl {
                             tipo = "confirmacion"
                             origen = "equipo"
                             usuario = $env:USERNAME
-                            mac_eq = $Global:SharedState.MacAddress
+                            mac_address = $Global:SharedState.MacAddress
                             nombre_equipo = $Global:Config.IdEquipo
                             accion = $Accion
                             resultado = $Resultado
@@ -572,31 +614,25 @@ function Start-CommandQueueMonitor {
                     if($comando.tipo -eq "confirmacion_comando"){
                         switch($comando.accion){
                             "finalizar"{
-                                            $payload = @{
-                                                tipo = "confirmacion"
-                                                origen = "equipo"
-                                                accion = $mensaje.accion
-                                                resultado = "ejecutando"
-                                                nombre_equipo = $Global:Config.IdEquipo
-                                                usuario = $Global:Config.Username
-                                                mac_eq = $Global:SharedState.MacAddress
-                                            }
-                                            Send-WS-Payload $payload | Out-Null
-
-                            }
+                                Invoke-EstadoFinalizado -Controles $controles -Response $response
+                                Start-Sleep -Seconds 3
+                            break;}
                             "renovar"{
                                 Invoke-EstadoRenovado -Controles $controles -Response $response
                                 Start-Sleep -Seconds 3
                                 Write-Host "Respuesta API renovación: $($resp | ConvertTo-Json -Compress)"
+                            break;
                             }
                             "bloquear"{
                                                       # Si por alguna razón llega aquí, manejarlo
                         Invoke-EstadoBloqueadoIntentoAcceso -Controles $controles -Response $response
                         $Global:SharedState.SessionActive = $false
+                        start-sleep -Seconds 3
                         break
                             }
                             "suspender"{
                                 Invoke-PantallaCompleta -Controles $controles -Response $response
+                                break;
                             }
                         }
                     }
@@ -607,31 +643,6 @@ function Start-CommandQueueMonitor {
     $timer.Start()
     return $timer
 }
-
-# ============================================================
-# 🌐 API REST
-# ============================================================
-function Invoke-ApiCall {
-    param([hashtable]$ExtraBody = @{})
-    $body = @{
-        username    = $Global:Config.Username
-        mac_address = $Global:SharedState.MacAddress
-        origen      = "equipo"
-        tipo        = "control"
-    } + $ExtraBody
-
-    $json = $body | ConvertTo-Json -Compress
-    $headers = @{ "Content-Type" = "application/json" }
-
-    try {
-        $response = Invoke-RestMethod -Uri $Global:Config.ApiUrl -Method Post -Headers $headers -Body $json -TimeoutSec 60
-        return $response
-    } catch {
-        Write-Log "Error API: $($_.Exception.Message)" -Tipo Error
-        return @{ estado = "Error"; mensaje = $_.Exception.Message }
-    }
-}
-
 function Invoke-Mensaje {
     param(
         $Texto = "Mensaje del administrador",
@@ -797,7 +808,7 @@ function Invoke-EstadoBloqueadoIntentoAcceso {
         Get-Date
     }
     
-    $tiempoBloqueo = 10 # minutos
+
     $horaDesbloqueo = $fechaBloqueo.AddMinutes($tiempoBloqueo)
     $minutosRestantes = [Math]::Ceiling(($horaDesbloqueo - (Get-Date)).TotalMinutes)
     
@@ -817,6 +828,7 @@ function Invoke-EstadoBloqueadoIntentoAcceso {
         "OK",
         "Warning"
     )
+    start-sleep -Seconds 2
     
     Write-Log "⏳ Usuario debe esperar $minutosRestantes minutos más" -Tipo Warning
     
@@ -856,271 +868,554 @@ function Invoke-EstadoSuspendido {
     Write-Log "Estado: SUSPENDIDO - Pantalla de decisión" -Tipo Warning
 
     try {
-        $tiempo = if ($Response.tiempo_restante) { [int]$Response.tiempo_restante } else { 60 }
-
         # =======================================
-        # FORM PANTALLA COMPLETA
+        # CONFIGURACIÓN INICIAL
+        # =======================================
+        $tiempoLimite = 120  # 2 minutos en segundos
+        $script:tiempoRestante = $tiempoLimite
+        $script:formClosed = $false
+        $script:sesionRenovada = $false
+        $script:cierreYaEnviado = $false
+        $timerCountdown = $null
+        $timerRespuestas = $null
+        
+        # =======================================
+        # FUNCIÓN DE LIMPIEZA Y CIERRE
+        # =======================================
+        $cierreSesionAction = {
+            param(
+                [string]$Motivo = "manual"
+            )
+            
+            if ($script:cierreYaEnviado) {
+                return
+            }
+            
+            $script:cierreYaEnviado = $true
+            Write-Log "🚪 Cerrando sesión - Motivo: $Motivo" -Tipo Warning
+            
+            # Detener timers
+            if ($timerCountdown) {
+                $timerCountdown.Stop()
+            }
+            if ($timerRespuestas) {
+                $timerRespuestas.Stop()
+            }
+            
+            # Si la sesión no fue renovada, finalizar
+            if (-not $script:sesionRenovada) {
+                # Llamar al API para finalizar la sesión (checkin en FOLIO)
+                $payload = @{
+                    tipo = "finalizar"
+                    username = $Global:Config.Username
+                    mac_address = $Global:SharedState.MacAddress
+                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                    motivo = $Motivo
+                }
+                
+                try {
+                    $uri = "$($Global:Config.ApiUrl)?tipo=finalizar&username=$([uri]::EscapeDataString($Global:Config.Username))&mac_address=$([uri]::EscapeDataString($Global:SharedState.MacAddress))"
+                    $response = Invoke-WebRequest -Uri $uri -Method POST -ContentType 'application/json' -Body ($payload | ConvertTo-Json) -TimeoutSec 5 -ErrorAction SilentlyContinue
+                    
+                    if ($response.StatusCode -eq 200) {
+                        Write-Log "✅ Sesión finalizada correctamente - $Motivo" -Tipo Success
+                    } else {
+                        Write-Log "⚠️ Respuesta inesperada del servidor: $($response.StatusCode)" -Tipo Warning
+                    }
+                } catch {
+                    Write-Log "⚠️ Error finalizando sesión: $_" -Tipo Warning
+                }
+                
+                # Notificar al WebSocket
+                $accion = if ($Motivo -eq "timeout") { "expirado" } else { "cerrar" }
+                $payloadWS = @{
+                    tipo = "solicitud"
+                    origen = "equipo"
+                    accion = $accion
+                    nombre_equipo = $Global:Config.IdEquipo
+                    username = $Global:Config.Username
+                    mac_address = $Global:SharedState.MacAddress
+                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                    motivo = $Motivo
+                }
+                
+                try {
+                    $wsClient = $Global:SharedState.WSClientReference
+                    if ($wsClient -and $wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                        $json = $payloadWS | ConvertTo-Json -Depth 10 -Compress
+                        $buffer = [System.Text.Encoding]::UTF8.GetBytes($json)
+                        $segment = New-Object System.ArraySegment[byte] (,$buffer)
+                        
+                        $task = $wsClient.SendAsync(
+                            $segment,
+                            [System.Net.WebSockets.WebSocketMessageType]::Text,
+                            $true,
+                            [System.Threading.CancellationToken]::None
+                        )
+                        
+                        $task.Wait(2000) | Out-Null
+                        Write-Log "✅ Notificación de cierre enviada al WebSocket" -Tipo Success
+                    }
+                } catch {
+                    Write-Log "⚠️ No se pudo notificar cierre al WebSocket: $_" -Tipo Warning
+                }
+                
+                # Marcar sesión como inactiva
+                $Global:SharedState.SessionActive = $false
+            }
+            
+            # Cerrar el formulario si existe
+            if ($form -and -not $form.IsDisposed) {
+                $script:formClosed = $true
+                $form.Close()
+            }
+        }
+        
+        # =======================================
+        # CREAR FORM FULLSCREEN
         # =======================================
         $form = New-Object System.Windows.Forms.Form
         $form.WindowState = 'Maximized'
         $form.FormBorderStyle = 'None'
-        $form.BackColor = [System.Drawing.Color]::FromArgb(20,20,20)
+        $form.ControlBox = $false
         $form.TopMost = $true
+        $form.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 20)
         $form.KeyPreview = $true
-
+        $form.ShowInTaskbar = $false
+        
+        # Bloquear teclas de salida
         $form.Add_KeyDown({
-            if ($_.Control -and $_.KeyCode -eq 'F4') {
-                $_.Handled = $false
-            } else {
-                $_.SuppressKeyPress = $true
+            if ($_.KeyCode -eq 'Escape' -or ($_.Control -and $_.KeyCode -eq 'F4')) {
                 $_.Handled = $true
+                $_.SuppressKeyPress = $true
+            }
+        })
+
+        # Evento al cerrar el formulario
+        $form.Add_FormClosing({
+            param($sender, $e)
+            
+            # Si no se ha enviado cierre aún, hacerlo ahora
+            if (-not $script:cierreYaEnviado) {
+                & $cierreSesionAction -Motivo "manual"
             }
         })
 
         # =======================================
-        # LOGO
+        # PANEL CENTRAL PRINCIPAL
+        # =======================================
+        $panelCentral = New-Object System.Windows.Forms.Panel
+        $panelCentral.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
+        $panelCentral.Dock = 'Fill'
+        $panelCentral.AutoScroll = $false
+        $form.Controls.Add($panelCentral)
+
+        # =======================================
+        # LOGO (SUPERIOR)
         # =======================================
         $logo = New-Object System.Windows.Forms.PictureBox
-        $logo.Size = [System.Drawing.Size]::new(220,220)
-        $logo.Location = [System.Drawing.Point]::new(($form.Width - 220)/2, 40)
         $logo.SizeMode = 'StretchImage'
+        $logo.Size = [System.Drawing.Size]::new(120, 120)
+        $logo.Location = [System.Drawing.Point]::new(([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width / 2) - 60, 40)
+        
         if (Test-Path $Global:Config.LogoPath) {
-            try { $logo.Image = [System.Drawing.Image]::FromFile($Global:Config.LogoPath) } catch {}
+            try {
+                $logo.Image = [System.Drawing.Image]::FromFile($Global:Config.LogoPath)
+            } catch { }
         }
-        $form.Controls.Add($logo)
+        $panelCentral.Controls.Add($logo)
 
         # =======================================
-        # INFO
+        # TÍTULO PRINCIPAL
         # =======================================
-        $labelInfo = New-Object System.Windows.Forms.Label
-        $labelInfo.ForeColor = [System.Drawing.Color]::White
-        $labelInfo.Font = New-Object System.Drawing.Font("Segoe UI",18,[System.Drawing.FontStyle]::Bold)
-        $labelInfo.AutoSize = $true
-        $labelInfo.Text = "⏰ TU SESIÓN HA FINALIZADO`n`nUsuario: $($Global:Config.Username)`nEquipo: $($Global:Config.IdEquipo)"
-        $labelInfo.Location = [System.Drawing.Point]::new(($form.Width - 600)/2, 300)
-        $labelInfo.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-        $form.Controls.Add($labelInfo)
+        $labelTitulo = New-Object System.Windows.Forms.Label
+        $labelTitulo.Text = "⏸️  SESIÓN SUSPENDIDA"
+        $labelTitulo.Font = New-Object System.Drawing.Font("Segoe UI", 32, [System.Drawing.FontStyle]::Bold)
+        $labelTitulo.ForeColor = [System.Drawing.Color]::White
+        $labelTitulo.AutoSize = $false
+        $labelTitulo.TextAlign = 'MiddleCenter'
+        $labelTitulo.Location = [System.Drawing.Point]::new(0, 180)
+        $labelTitulo.Size = [System.Drawing.Size]::new([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width, 60)
+        $panelCentral.Controls.Add($labelTitulo)
 
         # =======================================
-        # TIMER COUNTDOWN
+        # MENSAJE INFORMATIVO
+        # =======================================
+        $labelMensaje = New-Object System.Windows.Forms.Label
+        $labelMensaje.Text = "Tu sesión ha sido suspendida.`n`nDebes renovarla para continuar trabajando.`n`nElige una de las siguientes opciones:"
+        $labelMensaje.Font = New-Object System.Drawing.Font("Segoe UI", 14)
+        $labelMensaje.ForeColor = [System.Drawing.Color]::LightGray
+        $labelMensaje.AutoSize = $false
+        $labelMensaje.TextAlign = 'MiddleCenter'
+        $labelMensaje.Location = [System.Drawing.Point]::new(100, 260)
+        $labelMensaje.Size = [System.Drawing.Size]::new([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width - 200, 100)
+        $panelCentral.Controls.Add($labelMensaje)
+
+        # =======================================
+        # TIMER DISPLAY (BIEN VISIBLE)
         # =======================================
         $labelTimer = New-Object System.Windows.Forms.Label
-        $labelTimer.ForeColor = [System.Drawing.Color]::Orange
-        $labelTimer.Font = New-Object System.Drawing.Font("Segoe UI",36,[System.Drawing.FontStyle]::Bold)
-        $labelTimer.AutoSize = $true
-        $labelTimer.Location = [System.Drawing.Point]::new(($form.Width - 400)/2, 420)
-        $form.Controls.Add($labelTimer)
+        $labelTimer.Text = "⏱️  2:00"
+        $labelTimer.Font = New-Object System.Drawing.Font("Segoe UI", 48, [System.Drawing.FontStyle]::Bold)
+        $labelTimer.ForeColor = [System.Drawing.Color]::FromArgb(255, 200, 0)
+        $labelTimer.AutoSize = $false
+        $labelTimer.TextAlign = 'MiddleCenter'
+        $labelTimer.Location = [System.Drawing.Point]::new(0, 370)
+        $labelTimer.Size = [System.Drawing.Size]::new([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width, 80)
+        $panelCentral.Controls.Add($labelTimer)
 
         # =======================================
-        # MENSAJE IMPORTANTE
+        # PANEL DE BOTONES
         # =======================================
-        $labelAviso = New-Object System.Windows.Forms.Label
-        $labelAviso.ForeColor = [System.Drawing.Color]::Yellow
-        $labelAviso.Font = New-Object System.Drawing.Font("Segoe UI",14,[System.Drawing.FontStyle]::Bold)
-        $labelAviso.AutoSize = $true
-        $labelAviso.Text = "⚠️ Si no renuevas a tiempo, tu sesión será cerrada automáticamente."
-        $labelAviso.Location = [System.Drawing.Point]::new(($form.Width - 700)/2, 500)
-        $labelAviso.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
-        $form.Controls.Add($labelAviso)
+        $panelBotones = New-Object System.Windows.Forms.Panel
+        $panelBotones.BackColor = 'Transparent'
+        $panelBotones.Location = [System.Drawing.Point]::new(0, 480)
+        $panelBotones.Size = [System.Drawing.Size]::new([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width, 200)
+        $panelCentral.Controls.Add($panelBotones)
+
+        # Ancho disponible y cálculo de posiciones
+        $screenWidth = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width
+        $btnWidth = 250
+        $spacing = 30
+        $totalWidth = ($btnWidth * 3) + ($spacing * 2)
+        $startX = ($screenWidth - $totalWidth) / 2
 
         # =======================================
-        # FUNCIÓN CREADORA DE BOTONES
+        # BOTÓN 1: SOLICITAR RENOVACIÓN (VERDE)
         # =======================================
-        function New-BigButton($text, $color, $y, $clickAction) {
-            $btn = New-Object System.Windows.Forms.Button
-            $btn.Text = $text
-            $btn.Font = New-Object System.Drawing.Font("Segoe UI",20,[System.Drawing.FontStyle]::Bold)
-            $btn.Size = [System.Drawing.Size]::new(450,75)
-            $btn.BackColor = $color
-            $btn.ForeColor = [System.Drawing.Color]::White
-            $btn.Location = [System.Drawing.Point]::new(($form.Width - 450)/2, $y)
-            $btn.Add_Click($clickAction)
-            return $btn
-        }
-
-        # =======================================
-        # FUNCIÓN ENVÍO WEBSOCKET
-        # =======================================
-        function Send-WS-Payload {
-            param([hashtable]$payload)
+        $btnSolicitar = New-Object System.Windows.Forms.Button
+        $btnSolicitar.Text = "📋 Solicitar Renovación`nAl Administrador"
+        $btnSolicitar.Size = [System.Drawing.Size]::new($btnWidth, 150)
+        $btnSolicitar.Location = [System.Drawing.Point]::new($startX, 25)
+        $btnSolicitar.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+        $btnSolicitar.BackColor = [System.Drawing.Color]::FromArgb(76, 175, 80)
+        $btnSolicitar.ForeColor = [System.Drawing.Color]::White
+        $btnSolicitar.FlatStyle = 'Flat'
+        $btnSolicitar.FlatAppearance.BorderSize = 0
+        $btnSolicitar.Cursor = 'Hand'
+        $btnSolicitar.Add_MouseEnter({ $btnSolicitar.BackColor = [System.Drawing.Color]::FromArgb(56, 142, 60) })
+        $btnSolicitar.Add_MouseLeave({ $btnSolicitar.BackColor = [System.Drawing.Color]::FromArgb(76, 175, 80) })
+        
+        $btnSolicitar.Add_Click({
+            Write-Log "🟢 Botón: Solicitar Renovación" -Tipo Success
+            $btnSolicitar.Enabled = $false
+            
+            # Enviar solicitud al servidor
+            $payload = @{
+                tipo = "solicitud"
+                origen = "equipo"
+                destino = "server"
+                accion = "solicitar_renovacion"
+                nombre_equipo = $Global:Config.IdEquipo
+                username = $Global:Config.Username
+                mac_address = $Global:SharedState.MacAddress
+                timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            }
+            
             try {
                 $wsClient = $Global:SharedState.WSClientReference
                 if ($wsClient -and $wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-                    $json = $payload | ConvertTo-Json -Depth 10
+                    $json = $payload | ConvertTo-Json -Depth 10 -Compress
                     $buffer = [System.Text.Encoding]::UTF8.GetBytes($json)
                     $segment = New-Object System.ArraySegment[byte] (,$buffer)
-                    $wsClient.SendAsync(
+                    
+                    $task = $wsClient.SendAsync(
                         $segment,
                         [System.Net.WebSockets.WebSocketMessageType]::Text,
                         $true,
                         [System.Threading.CancellationToken]::None
-                    ) | Out-Null
-                    Write-Log "⚡ Mensaje WS enviado $json " -Tipo Success
-                    return $true
+                    )
+                    
+                    $task.Wait(3000) | Out-Null
+                    Write-Log "✅ Solicitud de renovación enviada al dashboard" -Tipo Success
+                    $btnSolicitar.Text = "✅ Solicitud Enviada`nEsperando Respuesta..."
                 }
             } catch {
-                Write-Log "❌ Error enviando WS: $_ " -Tipo Error
+                Write-Log "❌ Error enviando solicitud: $_" -Tipo Error
+                $btnSolicitar.Enabled = $true
             }
-            return $false
-        }
-
-        # =======================================
-        # BOTÓN 1: SOLICITAR RENOVACIÓN AL DASHBOARD
-        # =======================================
-        $btnSolicitar = New-BigButton "🔔 Solicitar renovación al administrador" ([System.Drawing.Color]::DarkOrange) 600 {
-
-    $payload = @{
-        tipo = "solicitud"
-        origen = "equipo"
-        accion = "solicitar_renovacion"
-        nombre_equipo = $Global:Config.IdEquipo
-        username = $Global:Config.Username
-        mac_eq = $Global:SharedState.MacAddress
-        timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    }
-
-    Send-WS-Payload $payload | Out-Null
-
-    [System.Windows.Forms.MessageBox]::Show(
-        "Solicitud enviada al administrador.`nEspera su respuesta...",
-        "Solicitud Enviada",
-        "OK",
-        "Information"
-    )
-}
-$form.Controls.Add($btnSolicitar)
-
-
-        # =======================================
-        # BOTÓN 2: RENOVAR CON CLAVE ADMIN
-        # =======================================
-$btnClave = New-BigButton "🔐 Renovar con clave de administrador" ([System.Drawing.Color]::SteelBlue) 690 {
-
-    Add-Type -AssemblyName Microsoft.VisualBasic
-    $clave = [Microsoft.VisualBasic.Interaction]::InputBox(
-        "Ingresa la clave de administrador:",
-        "Renovación con Clave"
-    )
-
-    if ($clave) {
-
-        $payload = @{
-            tipo = "solicitud"
-            origen = "equipo"
-            accion = "renovar_clave"
-            nombre_equipo = $Global:Config.IdEquipo
-            username = $Global:Config.Username
-            clave_admin = $clave
-            mac_eq = $Global:SharedState.MacAddress
-        }
-
-        Send-WS-Payload $payload | Out-Null
+        })
         
-        [System.Windows.Forms.MessageBox]::Show(
-            "Solicitud enviada. Esperando respuesta del administrador…",
-            "Solicitud Enviada",
-            "OK",
-            "Information"
-        )
-    }
-}
-$form.Controls.Add($btnClave)
-
+        $panelBotones.Controls.Add($btnSolicitar)
 
         # =======================================
-        # BOTÓN 3: CERRAR SESIÓN (va a FINALIZADO + BLOQUEADO temporal)
+        # BOTÓN 2: RENOVAR CON CLAVE (AZUL)
         # =======================================
-        $btnCerrar = New-BigButton "⛔ Cerrar sesión" ([System.Drawing.Color]::Firebrick) 780 {
-    $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "¿Deseas finalizar tu sesión?",
-        "Confirmar Cierre",
-        "YesNo",
-        "Warning"
-    )
-    
-    if ($confirm -eq 'Yes') {
-        Write-Log "🚪 Usuario cerró sesión voluntariamente" -Tipo Warning
-        $payload = @{
-            tipo = "solicitud"
-            origen = "equipo"
-            accion = "cerrar"
-            nombre_equipo = $Global:Config.IdEquipo
-            username = $Global:Config.Username
-            mac_eq = $Global:SharedState.MacAddress
-        }
-        Send-WS-Payload $payload | Out-Null
-
-
-
-        if ($response.estado -eq "Finalizado") {
-            [System.Windows.Forms.MessageBox]::Show(
-                "✔ Tu sesión ha sido finalizada",
-                "Sesión Finalizada",
-                "OK",
-                "Information"
-            )
-            $form.Close()
-        } else {
-            [System.Windows.Forms.MessageBox]::Show(
-                "❌ Error al finalizar: " + $response.mensaje,
-                "Error",
-                "OK",
-                "Error"
-            )
-        }
-    }
-}
-$form.Controls.Add($btnCerrar)
+        $btnClave = New-Object System.Windows.Forms.Button
+        $btnClave.Text = "🔑 Renovar con Clave`nde Administrador"
+        $btnClave.Size = [System.Drawing.Size]::new($btnWidth, 150)
+        $btnClave.Location = [System.Drawing.Point]::new($startX + $btnWidth + $spacing, 25)
+        $btnClave.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+        $btnClave.BackColor = [System.Drawing.Color]::FromArgb(33, 150, 243)
+        $btnClave.ForeColor = [System.Drawing.Color]::White
+        $btnClave.FlatStyle = 'Flat'
+        $btnClave.FlatAppearance.BorderSize = 0
+        $btnClave.Cursor = 'Hand'
+        $btnClave.Add_MouseEnter({ $btnClave.BackColor = [System.Drawing.Color]::FromArgb(21, 101, 192) })
+        $btnClave.Add_MouseLeave({ $btnClave.BackColor = [System.Drawing.Color]::FromArgb(33, 150, 243) })
+        
+        $btnClave.Add_Click({
+            Write-Log "🔵 Botón: Renovar con Clave" -Tipo Success
+            
+            # Modal de entrada de clave
+            $formClave = New-Object System.Windows.Forms.Form
+            $formClave.Text = "Ingresar Clave de Administrador"
+            $formClave.Size = [System.Drawing.Size]::new(400, 200)
+            $formClave.StartPosition = 'CenterScreen'
+            $formClave.FormBorderStyle = 'FixedDialog'
+            $formClave.MaximizeBox = $false
+            $formClave.MinimizeBox = $false
+            $formClave.TopMost = $true
+            $formClave.BackColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
+            
+            # Label
+            $lbl = New-Object System.Windows.Forms.Label
+            $lbl.Text = "Ingresa la clave de administrador:"
+            $lbl.ForeColor = [System.Drawing.Color]::White
+            $lbl.Location = [System.Drawing.Point]::new(20, 20)
+            $lbl.AutoSize = $true
+            $formClave.Controls.Add($lbl)
+            
+            # TextBox (ocultar caracteres)
+            $txtClave = New-Object System.Windows.Forms.TextBox
+            $txtClave.UseSystemPasswordChar = $true
+            $txtClave.Location = [System.Drawing.Point]::new(20, 50)
+            $txtClave.Size = [System.Drawing.Size]::new(360, 30)
+            $txtClave.Font = New-Object System.Drawing.Font("Segoe UI", 12)
+            $txtClave.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+            $txtClave.ForeColor = [System.Drawing.Color]::White
+            $formClave.Controls.Add($txtClave)
+            
+            # Botón Aceptar
+            $btnAceptar = New-Object System.Windows.Forms.Button
+            $btnAceptar.Text = "✅ Validar"
+            $btnAceptar.Location = [System.Drawing.Point]::new(120, 100)
+            $btnAceptar.Size = [System.Drawing.Size]::new(80, 35)
+            $btnAceptar.BackColor = [System.Drawing.Color]::FromArgb(76, 175, 80)
+            $btnAceptar.ForeColor = [System.Drawing.Color]::White
+            $btnAceptar.FlatStyle = 'Flat'
+            
+            $btnAceptar.Add_Click({
+                $claveIngresada = $txtClave.Text
+                Write-Log "🔐 Clave ingresada, validando..." -Tipo Info
+                
+                # Enviar clave al servidor para validación y renovación
+                $payload = @{
+                    tipo = "comando_api"
+                    accion = "validar_admin"
+                    origen = "equipo"
+                    nombre_equipo = $Global:Config.IdEquipo
+                    username = $Global:Config.Username
+                    mac_address = $Global:SharedState.MacAddress
+                    clave_admin = $claveIngresada
+                    timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                }
+                
+                try {
+                    $wsClient = $Global:SharedState.WSClientReference
+                    if ($wsClient -and $wsClient.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+                        $json = $payload | ConvertTo-Json -Depth 10 -Compress
+                        $buffer = [System.Text.Encoding]::UTF8.GetBytes($json)
+                        $segment = New-Object System.ArraySegment[byte] (,$buffer)
+                        
+                        $task = $wsClient.SendAsync(
+                            $segment,
+                            [System.Net.WebSockets.WebSocketMessageType]::Text,
+                            $true,
+                            [System.Threading.CancellationToken]::None
+                        )
+                        
+                        $task.Wait(3000) | Out-Null
+                        Write-Log "✅ Validación de clave enviada al servidor" -Tipo Success
+                        $formClave.Close()
+                    }
+                } catch {
+                    Write-Log "❌ Error enviando validación: $_" -Tipo Error
+                }
+            })
+            
+            $formClave.Controls.Add($btnAceptar)
+            
+            # Botón Cancelar
+            $btnCancelarClave = New-Object System.Windows.Forms.Button
+            $btnCancelarClave.Text = "❌ Cancelar"
+            $btnCancelarClave.Location = [System.Drawing.Point]::new(210, 100)
+            $btnCancelarClave.Size = [System.Drawing.Size]::new(80, 35)
+            $btnCancelarClave.BackColor = [System.Drawing.Color]::FromArgb(244, 67, 54)
+            $btnCancelarClave.ForeColor = [System.Drawing.Color]::White
+            $btnCancelarClave.FlatStyle = 'Flat'
+            $btnCancelarClave.Add_Click({ $formClave.Close() })
+            $formClave.Controls.Add($btnCancelarClave)
+            
+            $formClave.ShowDialog() | Out-Null
+        })
+        
+        $panelBotones.Controls.Add($btnClave)
 
         # =======================================
-        # TIMER DE COUNTDOWN
+        # BOTÓN 3: CANCELAR (ROJO)
+        # =======================================
+        $btnCancelar = New-Object System.Windows.Forms.Button
+        $btnCancelar.Text = "❌ Cancelar`nSesión"
+        $btnCancelar.Size = [System.Drawing.Size]::new($btnWidth, 150)
+        $btnCancelar.Location = [System.Drawing.Point]::new($startX + ($btnWidth + $spacing) * 2, 25)
+        $btnCancelar.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+        $btnCancelar.BackColor = [System.Drawing.Color]::FromArgb(244, 67, 54)
+        $btnCancelar.ForeColor = [System.Drawing.Color]::White
+        $btnCancelar.FlatStyle = 'Flat'
+        $btnCancelar.FlatAppearance.BorderSize = 0
+        $btnCancelar.Cursor = 'Hand'
+        $btnCancelar.Add_MouseEnter({ $btnCancelar.BackColor = [System.Drawing.Color]::FromArgb(211, 47, 47) })
+        $btnCancelar.Add_MouseLeave({ $btnCancelar.BackColor = [System.Drawing.Color]::FromArgb(244, 67, 54) })
+        
+        $btnCancelar.Add_Click({
+            Write-Log "🔴 Botón: Cancelar Sesión" -Tipo Warning
+            & $cierreSesionAction -Motivo "cancelado"
+        })
+        
+        $panelBotones.Controls.Add($btnCancelar)
+
+        # =======================================
+        # TIMER PARA PROCESAR RESPUESTAS
+        # (Hilo separado - frecuencia más baja)
+        # =======================================
+        $timerRespuestas = New-Object System.Windows.Forms.Timer
+        $timerRespuestas.Interval = 300
+        $timerRespuestas.Add_Tick({
+            try {
+                # Evitar procesamiento si ya se cerró
+                if ($script:cierreYaEnviado) {
+                    return
+                }
+                
+                while ($Global:SharedState.CommandQueue.Count -gt 0) {
+                    $comando = $Global:SharedState.CommandQueue.Dequeue()
+                    
+                    # Respuesta de solicitud de renovación (desde dashboard)
+                    if ($comando.tipo -eq "respuesta_solicitud_renovacion") {
+                        $estado = $comando.estado
+                        Write-Log "📨 Respuesta de solicitud: $estado" -Tipo Success
+                        
+                        if ($estado -eq "aceptada") {
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "✅ El administrador aprobó tu solicitud.`n`nTu sesión ha sido renovada. ¡Puedes continuar!",
+                                "Renovación Aprobada",
+                                "OK",
+                                "Information"
+                            )
+                            $script:sesionRenovada = $true
+                            & $cierreSesionAction -Motivo "renovado"
+                        } elseif ($estado -eq "rechazada") {
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "❌ El administrador rechazó tu solicitud.`n`nTu sesión será finalizada.",
+                                "Solicitud Rechazada",
+                                "OK",
+                                "Warning"
+                            )
+                            & $cierreSesionAction -Motivo "rechazado"
+                        }
+                    }
+                    
+                    # Respuesta de validación de clave (desde API)
+                    if ($comando.tipo -eq "confirmacion_comando" -and $comando.accion -eq "validar_admin") {
+                        $estado = $comando.estado
+                        Write-Log "🔐 Respuesta de validación de clave: $estado" -Tipo Success
+                        
+                        if ($estado -eq "Renovado") {
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "✅ Clave validada correctamente.`n`nTu sesión ha sido renovada. ¡Puedes continuar!",
+                                "Renovación Exitosa",
+                                "OK",
+                                "Information"
+                            )
+                            $script:sesionRenovada = $true
+                            & $cierreSesionAction -Motivo "renovado"
+                        } else {
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "❌ Clave incorrecta o error en validación.`n`nIntenta nuevamente.",
+                                "Error de Validación",
+                                "OK",
+                                "Error"
+                            )
+                            $btnClave.Enabled = $true
+                        }
+                    }
+                }
+            } catch {
+                Write-Log "⚠️ Error procesando respuestas: $_" -Tipo Warning
+            }
+        })
+        $timerRespuestas.Start()
+
+        # =======================================
+        # TIMER DE COUNTDOWN (2 MINUTOS)
+        # (Hilo completamente separado - frecuencia exacta)
         # =======================================
         $timerCountdown = New-Object System.Windows.Forms.Timer
-        $timerCountdown.Interval = 1000
+        $timerCountdown.Interval = 1000  # Exactamente 1 segundo
         $timerCountdown.Add_Tick({
-            if ($tiempo -le 0) {
-                $timerCountdown.Stop()
-                Write-Log "⏰ Tiempo agotado - Cerrando sesión automáticamente" -Tipo Warning
+            try {
+                # Evitar decrementar si ya se cerró
+                if ($script:cierreYaEnviado) {
+                    return
+                }
                 
-                # API: Finalizar sesión por tiempo agotado
-$payload = @{
-    tipo = "solicitud"
-    origen = "equipo"
-    accion = "expirado"
-    nombre_equipo = $Global:Config.IdEquipo
-    mac_eq = $Global:SharedState.MacAddress
-}
-Send-WS-Payload $payload | Out-Null
-
+                # Decrementar ANTES de actualizar UI
+                $script:tiempoRestante--
                 
-                $horaDesbloqueo = (Get-Date).AddMinutes(10).ToString("HH:mm")
-                [System.Windows.Forms.MessageBox]::Show(
-                    "⏰ Tu sesión ha expirado.`n`n⏱️ Tendrás un bloqueo temporal hasta las $horaDesbloqueo",
-                    "Sesión Expirada",
-                    "OK",
-                    "Warning"
-                )
+                # Verificar si llegó a cero
+                if ($script:tiempoRestante -le 0) {
+                    Write-Log "⏰ Tiempo agotado (2 minutos) - Cerrando automáticamente" -Tipo Warning
+                    & $cierreSesionAction -Motivo "timeout"
+                    return
+                }
                 
-                $form.Close()
-                $Global:SharedState.SessionActive = $false
+                # Calcular minutos y segundos
+                $minutos = [Math]::Floor($script:tiempoRestante / 60)
+                $segundos = $script:tiempoRestante % 60
+                
+                # Cambiar color según tiempo restante
+                if ($script:tiempoRestante -le 30) {
+                    $labelTimer.ForeColor = [System.Drawing.Color]::FromArgb(255, 87, 34)  # Rojo-naranja
+                } elseif ($script:tiempoRestante -le 60) {
+                    $labelTimer.ForeColor = [System.Drawing.Color]::FromArgb(255, 152, 0)  # Naranja
+                } else {
+                    $labelTimer.ForeColor = [System.Drawing.Color]::FromArgb(255, 200, 0)  # Amarillo
+                }
+                
+                # Actualizar display con formato correcto
+                $labelTimer.Text = "⏱️  $($minutos):$($segundos.ToString('00'))"
+                
+            } catch {
+                Write-Log "⚠️ Error en timer countdown: $_" -Tipo Warning
             }
-            
-            $labelTimer.Text = "⏱️ Tiempo restante: $(Format-TimeSpan $tiempo)"
-            $tiempo--
         })
-
         $timerCountdown.Start()
-        
+
         # =======================================
         # MOSTRAR FORM
         # =======================================
-        $form.ShowDialog() | Out-Null
+        $result = $form.ShowDialog()
 
-
+        # =======================================
+        # LIMPIEZA FINAL
+        # =======================================
+        if ($timerCountdown) {
+            $timerCountdown.Stop()
+            $timerCountdown.Dispose()
+        }
+        if ($timerRespuestas) {
+            $timerRespuestas.Stop()
+            $timerRespuestas.Dispose()
+        }
+        
+        Write-Log "✅ Pantalla de suspensión cerrada correctamente" -Tipo Success
+        
     } catch {
         Write-Log "❌ Error en estado suspendido: $_" -Tipo Error
     }
 }
+
 function Invoke-EstadoError {
     param([Parameter(Mandatory=$true)]$Controles,[Parameter(Mandatory=$true)]$Response)
     Write-Log "Estado: ERROR - $($Response.mensaje)" -Tipo Error
@@ -1135,72 +1430,525 @@ function Invoke-EstadoError {
     } catch { }
 }
 function Invoke-EstadoFinalizado {
-    param([Parameter(Mandatory=$true)]$Controles,[Parameter(Mandatory=$true)]$Response)
-    Write-Log "Estado: FINALIZADO - Sesión completada" -Tipo Success
-    $Controles.LabelInfo.ForeColor = [System.Drawing.Color]::Blue
-    $Controles.LabelTimer.Text = "✅ Sesión finalizada correctamente"; $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Green
-    $Controles.Form.Refresh(); Start-Sleep -Seconds 2; $Controles.Form.Close()
+    param(
+        [hashtable]$Controles,
+        [hashtable]$Response
+    )
+
+    Write-Log "🔚 Ejecutando estado finalizado..." -Tipo Info
+
+    # Aquí va tu lógica
+    try {
+        if ($Global:AutoInicio -eq $true) {
+            Write-Log "⏳ No cerramos el shell porque auto-inicio está activo" -Tipo Info
+            return
+        } else {
+            Write-Log "Estado: FINALIZADO - Sesión completada" -Tipo Success
+
+            # Actualizar UI con estado final
+            try {
+                $Controles.LabelInfo.ForeColor = [System.Drawing.Color]::Blue
+                $Controles.LabelTimer.Text = "✅ Sesión finalizada correctamente"
+                $Controles.LabelTimer.ForeColor = [System.Drawing.Color]::Green
+                $Controles.Form.Refresh()
+            } catch {
+                # Si los controles ya no existen, no interrumpimos el flujo
+            }
+
+            # Enviar confirmación al servidor para evitar re-intentos o reenvíos
+            try {
+                if (Get-Command -Name Send-Confirmacion -ErrorAction SilentlyContinue) {
+                    Send-Confirmacion -Resultado "finalizado" -Mensaje "Sesión finalizada localmente"
+                }
+            } catch {
+                Write-Log "⚠️ Error enviando confirmación al servidor: $_" -Tipo Warning
+            }
+
+            # Dar un breve margen para que el servidor procese la finalización
+            Start-Sleep -Seconds 3
+
+            # Marca global para que otros timers/loops sepan que la sesión terminó
+            $Global:SessionTerminated = Get-Date
+
+            # Cerrar formulario de forma ordenada
+            try {
+                $Controles.Form.Close()
+            } catch {
+                Write-Log "⚠️ Error cerrando formulario (se ignorará): $_" -Tipo Warning
+            }
+        }
+    }
+    catch {
+        Write-Log "Error cerrando formulario: $_" -Tipo Error
+    }
 }
+
 # ============================================================
-# 🚀 INICIALIZACIÓN Y BUCLE PRINCIPAL (Start-SessionLoop)
+# 🔄 NUEVA FUNCIÓN: Solicitar Estado via WebSocket
+# ============================================================
+function Request-EstadoViaWS {
+    param(
+        [int]$TimeoutSeconds = 30
+    )
+    
+    Write-Log "📡 Solicitando estado via WebSocket..." -Tipo Info
+    
+    # Verificar que WebSocket esté conectado
+    $wsClient = $Global:SharedState.WSClientReference
+    if (-not $wsClient -or $wsClient.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
+        Write-Log "❌ WebSocket no conectado" -Tipo Error
+        return @{
+            estado = "Error"
+            mensaje = "WebSocket no conectado"
+        }
+    }
+    
+    # Crear payload de solicitud
+    $payload = @{
+        tipo = "solicitar_estado"
+        nombre_equipo = $Global:Config.IdEquipo
+        username = $Global:Config.Username
+        mac_address = $Global:SharedState.MacAddress
+        origen = "equipo"
+        destino = "server"
+        timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+    
+    try {
+        # Enviar solicitud
+        $json = $payload | ConvertTo-Json -Compress
+        $buffer = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $segment = New-Object System.ArraySegment[byte] (,$buffer)
+        
+        $sendTask = $wsClient.SendAsync(
+            $segment,
+            [System.Net.WebSockets.WebSocketMessageType]::Text,
+            $true,
+            [System.Threading.CancellationToken]::None
+        )
+        
+        $sendCompleted = $sendTask.Wait(3000)
+        if (-not $sendCompleted) {
+            Write-Log "⚠️ Timeout enviando solicitud" -Tipo Warning
+            return @{ estado = "Error"; mensaje = "Timeout al enviar solicitud" }
+        }
+        
+        Write-Log "✅ Solicitud de estado enviada" -Tipo Success
+        
+        # Esperar respuesta en la cola de comandos
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $timeoutMs = $TimeoutSeconds * 1000
+        
+        while ($stopwatch.ElapsedMilliseconds -lt $timeoutMs) {
+            # Revisar cola de comandos
+            if ($Global:SharedState.CommandQueue.Count -gt 0) {
+                try {
+                    $respuesta = $Global:SharedState.CommandQueue.Dequeue()
+                    
+                    # Convertir PSCustomObject a Hashtable si es necesario
+                    if ($respuesta -is [PSCustomObject]) {
+                        $respuesta = ConvertTo-Hashtable $respuesta
+                    }
+                    
+                    # Verificar si es la respuesta de estado
+                    if ($respuesta.tipo -eq "respuesta_estado") {
+                        Write-Log "📥 Respuesta de estado recibida: $($respuesta.estado)" -Tipo Success
+                        return $respuesta
+                    }
+                    
+                    # Si no es respuesta de estado, volver a encolar
+                    $Global:SharedState.CommandQueue.Enqueue($respuesta)
+                    
+                } catch {
+                    Write-Log "⚠️ Error procesando cola: $_" -Tipo Warning
+                }
+            }
+            
+            # Pequeña pausa para no saturar CPU
+            Start-Sleep -Milliseconds 50
+        }
+        
+        Write-Log "⏰ Timeout esperando respuesta de estado" -Tipo Warning
+        return @{
+            estado = "Error"
+            mensaje = "Timeout esperando respuesta del servidor"
+        }
+        
+    } catch {
+        Write-Log "❌ Error solicitando estado: $_" -Tipo Error
+        return @{
+            estado = "Error"
+            mensaje = "Error de comunicación: $_"
+        }
+    }
+}
+
+# ============================================================
+# 🔄 FUNCIÓN Start-SessionLoop MODIFICADA
 # ============================================================
 function Start-SessionLoop {
     Write-Log "Iniciando bucle principal de sesión..." -Tipo Info
+    
     try {
+        # Verificar que WebSocket esté conectado
+        if (-not $Global:SharedState.WebSocketConnected) {
+            Write-Log "❌ WebSocket no conectado, esperando..." -Tipo Warning
+            
+            $waited = 0
+            while (-not $Global:SharedState.WebSocketConnected -and $waited -lt 10) {
+                Start-Sleep -Seconds 1
+                $waited++
+            }
+            
+            if (-not $Global:SharedState.WebSocketConnected) {
+                Write-Log "❌ No se pudo establecer conexión WebSocket" -Tipo Error
+                [System.Windows.Forms.MessageBox]::Show(
+                    "No se pudo conectar al servidor.`n`nVerifica que el servidor WebSocket esté en ejecución.",
+                    "Error de Conexión",
+                    "OK",
+                    "Error"
+                )
+                return
+            }
+        }
+        
+        # Crear controles de UI
         $controles = New-SessionForm
-        $response = $payload = @{ confirmar_inicio = "true" }
+        
+        # ============================================================
+        # 📡 SOLICITAR ESTADO INICIAL VIA WEBSOCKET
+        # ============================================================
+        Write-Log "📡 Obteniendo estado inicial via WebSocket..." -Tipo Info
+        
+        $reintentos = 0
+        $maxReintentos = 2
+        while ($reintentos -lt $maxReintentos) {
+            $response = Request-EstadoViaWS -TimeoutSeconds 30
+            if ($null -ne $response -and $response.estado) {
+                break
+            }
+            $reintentos++
+            if ($reintentos -lt $maxReintentos) {
+                Start-Sleep -Seconds 2
+            }
+        }
+        
+        # Validar respuesta
+        if (-not $response) {
+            Write-Log "❌ No se recibió respuesta del servidor" -Tipo Error
+            [System.Windows.Forms.MessageBox]::Show(
+                "No se pudo obtener respuesta del servidor.`n`nIntenta nuevamente más tarde.",
+                "Error de Comunicación",
+                "OK",
+                "Error"
+            )
+            return
+        }
+        
+        if ($response.estado -eq "Error") {
+            Write-Log "❌ Error en respuesta: $($response.mensaje)" -Tipo Error
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error del servidor:`n`n$($response.mensaje)",
+                "Error del Sistema",
+                "OK",
+                "Error"
+            )
+            return
+        }
+        
+        Write-Log "✅ Estado inicial recibido: $($response.estado)" -Tipo Success
 
-        if (-not $response.estado) { Write-Log "No se pudo obtener estado inicial" -Tipo Error; return }
+        # ============================================================
+        # 🚀 DETECTAR AUTO-INICIO
+        # ============================================================
+        if ($response.estado -eq "Finalizado" -and $response.auto_iniciada -eq $true) {
+            Write-Log "🚀 Sesión auto-iniciada detectada" -Tipo Success
+            # Mostrar notificación breve
+            $controles.LabelTimer.ForeColor = [System.Drawing.Color]::DarkGreen
+            $controles.LabelTimer.Text = "🟢 Sesión iniciada automáticamente"
+            $controles.Form.Refresh()  
+            Start-Sleep -Seconds 2
+        }
+
+        # ============================================================
+        # ⚠️ MANEJAR ESTADOS TERMINALES ANTES DEL BUCLE
+        # ============================================================
+        
+        # Si el estado inicial es Finalizado y NO hay auto-inicio, salir inmediatamente
+        if ($response.estado -eq "Finalizado" -and -not $response.auto_iniciada) {
+            Write-Log "🏁 Estado inicial es Finalizado sin auto-inicio, saliendo..." -Tipo Info
+            
+            # Mostrar mensaje breve
+            $controles.LabelInfo.ForeColor = [System.Drawing.Color]::Blue
+            $controles.LabelTimer.Text = "✅ Sesión finalizada - Puedes cerrar esta ventana"
+            $controles.LabelTimer.ForeColor = [System.Drawing.Color]::Green
+            $controles.Form.Show()
+            $controles.Form.Refresh()
+            
+            Start-Sleep -Seconds 3
+            
+            # Cerrar y salir
+            try {
+                if ($controles.Form -and -not $controles.Form.IsDisposed) {
+                    $controles.Form.Close()
+                    $controles.Form.Dispose()
+                }
+            } catch { }
+            
+            Write-Log "✅ Programa finalizado correctamente" -Tipo Success
+            return
+        }
+
+        # Manejar caso de bloqueo al inicio
+        if ($response.estado -eq "Bloqueado") {
+            Write-Log "🚫 Usuario bloqueado al intentar iniciar sesión" -Tipo Warning
+            
+            $bloqueadoHasta =$response.bloqueado_hasta;
+            
+            $minutosRestantes = [Math]::Ceiling(($bloqueadoHasta - (Get-Date)).TotalMinutes)
+            
+            if ($minutosRestantes -gt 0) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "🚫 TU CUENTA ESTÁ TEMPORALMENTE BLOQUEADA`n`n" +
+                    "⏰ Podrás iniciar sesión después de las: $bloqueadoHasta`n" +
+                    "⏱️ Tiempo restante: $minutosRestantes minutos`n`n" +
+                    "Motivo: Sesión anterior cerrada sin renovación",
+                    "Acceso Bloqueado",
+                    "OK",
+                    "Warning"
+                )
+                
+                Write-Log "⏳ Usuario debe esperar $minutosRestantes minutos" -Tipo Warning
+                
+                # Cerrar formulario y salir
+                try {
+                    if ($controles.Form -and -not $controles.Form.IsDisposed) {
+                        $controles.Form.Close()
+                        $controles.Form.Dispose()
+                    }
+                } catch { }
+                
+                return
+            }
+        }
+        
+        # Manejar usuario restringido en FOLIO
+        if ($response.estado -eq "Restringido") {
+            Write-Log "🚫 Usuario restringido en FOLIO" -Tipo Warning
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                $response.mensaje,
+                "Usuario Restringido",
+                "OK",
+                "Warning"
+            )
+            
+            # Cerrar formulario y salir
+            try {
+                if ($controles.Form -and -not $controles.Form.IsDisposed) {
+                    $controles.Form.Close()
+                    $controles.Form.Dispose()
+                }
+            } catch { }
+            
+            return
+        }
 
         # Monitor de comandos WebSocket
         $queueMonitor = Start-CommandQueueMonitor
-
+        
+        # Mostrar formulario
         $controles.Form.Show()
 
-
-        while ($response -and $response.estado -notin @("Finalizado","Restringido","Error")) {
-            Write-Log "Estado actual: $($response.estado)" -Tipo Info
+        # ============================================================
+        # BUCLE PRINCIPAL DE ESTADOS - SOLO PARA ESTADOS ACTIVOS
+        # ============================================================
+        Write-Log "🔄 Iniciando bucle de procesamiento de estados" -Tipo Info
+        
+        $iteraciones = 0
+        $maxIteraciones = 1000
+        $debeTerminar = $false
+        
+        # Solo entrar al bucle si el estado NO es terminal
+        while ($response -and 
+               -not $debeTerminar -and
+               $iteraciones -lt $maxIteraciones) {
+            
+            $iteraciones++
+            Write-Log "Estado actual (#$iteraciones): $($response.estado)" -Tipo Info
+            
             try {
-                # CONTROL GLOBAL DE INACTIVIDAD (usa Get-SystemIdleTime)
-
-                # Procesamiento normal de estados (UI)
                 switch ($response.estado) {
-                    "Abierto"   { $response = Invoke-EstadoAbierto -Controles $controles -Response $response }
-                    "Bloqueado" { $response = Invoke-EstadoBloqueadoIntentoAcceso -Controles $controles -Response $response }
-                    "Suspendido"{ $response = Invoke-EstadoSuspendido -Controles $controles -Response $response }
-                    "Renovado"  { $response = Invoke-EstadoRenovado -Controles $controles -Response $response }
-                    default {
-                        if ($response.folioResp -and $response.folioResp.raw.loan.status.name -eq "Closed") {
-                            Write-Log "Préstamo cerrado en FOLIO" -Tipo Info
-                            break
+                    "Abierto" {
+                        Write-Log "🟢 Procesando estado: ABIERTO" -Tipo Success
+                        Invoke-EstadoAbierto -Controles $controles -Response $response
+                        # Solicitar nuevo estado via WebSocket
+                        Write-Log "📡 Solicitando nuevo estado..." -Tipo Info
+                        $response = Request-EstadoViaWS -TimeoutSeconds 15
+                    }
+                    
+                    "Suspendido" {
+                        Write-Log "🟡 Procesando estado: SUSPENDIDO" -Tipo Warning
+                        Invoke-EstadoSuspendido -Controles $controles -Response $response
+                        
+                        # Solicitar nuevo estado
+                        Write-Log "📡 Solicitando nuevo estado..." -Tipo Info
+                        $response = Request-EstadoViaWS -TimeoutSeconds 15
+                    }
+                    
+                    "Renovado" {
+                        Write-Log "🔄 Procesando estado: RENOVADO" -Tipo Success
+                        Invoke-EstadoRenovado -Controles $controles -Response $response
+                        
+                        # Solicitar nuevo estado
+                        $response = Request-EstadoViaWS -TimeoutSeconds 15
+                    }
+                    
+                    "Bloqueado" {
+                        Write-Log "🚫 Procesando estado: BLOQUEADO (durante sesión)" -Tipo Warning
+                        # Mostrar mensaje de bloqueo
+                        $bloqueadoHasta = if ($response.bloqueado_hasta) {
+                            try { [DateTime]::Parse($response.bloqueado_hasta) }
+                            catch { (Get-Date).AddMinutes(10) }
+                        } else {
+                            (Get-Date).AddMinutes(10)
                         }
-                        Write-Log "Estado desconocido: $($response.estado)" -Tipo Warning
+                        
+                        $minutosRestantes = [Math]::Ceiling(($bloqueadoHasta - (Get-Date)).TotalMinutes)
+                        
+                        [System.Windows.Forms.MessageBox]::Show(
+                            "🚫 Tu cuenta ha sido bloqueada temporalmente.`n`n" +
+                            "⏰ Podrás volver a iniciar sesión después de las: $($bloqueadoHasta.ToString('HH:mm'))`n" +
+                            "⏱️ Tiempo restante: $minutosRestantes minutos",
+                            "Cuenta Bloqueada",
+                            "OK",
+                            "Warning"
+                        )
+                        start-sleep -Seconds 2
+                        
+                        # Marcar para salir del bucle
+                        $debeTerminar = $true
+                    }
+                    
+                    "Finalizado" {
+                            # Si server/Api dice que puede iniciar o que auto_iniciada true => no limpiar
+                        if ($response.puede_iniciar -eq $true -or $response.auto_iniciada -eq $true) {
+                            Write-Log "🚀 Auto-inicio disponible. Solicitar inicio o aceptar respuesta auto_iniciada" -Tipo Info
+
+                            # Si server ya auto_inició, te llegó 'Abierto' mezclado; si no, pide iniciar
+                            if ($response.auto_iniciada -eq $true -or $response.estado -eq 'Abierto') {
+                                Invoke-EstadoAbierto -Controles $controles -Response $response
+                                continue
+                            } else {
+                                # intentar pedir iniciar_auto al server
+                                $cmd = @{ tipo='comando_api'; accion='iniciar_auto'; origen='equipo'; username=$Global:Config.Username; mac_address=$Global:SharedState.MacAddress }
+                                $resp = Invoke-Api -Payload $cmd
+                                if ($resp.estado -eq 'Abierto' -or $resp.auto_iniciada -eq $true) {
+                                    Invoke-EstadoAbierto -Controles $controles -Response $resp
+                                    continue
+                                } else {
+                                    Write-Log "❌ Auto-inicio denegado por server: $($resp.mensaje)" -Tipo Warning
+                                }
+                            }
+                        }
+
+                        # Si no puede iniciar -> flujo normal de finalizado y limpieza
+                        Invoke-EstadoFinalizado -Controles $controles -Response $response
+                        break
+                    }
+                    
+                    "Restringido" {
+                        Write-Log "🚫 Usuario restringido durante la sesión" -Tipo Warning
+                        
+                        [System.Windows.Forms.MessageBox]::Show(
+                            $response.mensaje,
+                            "Usuario Restringido",
+                            "OK",
+                            "Warning"
+                        )
+                        
+                        # Marcar para salir del bucle
+                        $debeTerminar = $true
+                    }
+                    
+                    "Error" {
+                        Write-Log "❌ Estado de error recibido: $($response.mensaje)" -Tipo Error
+                        
+                        [System.Windows.Forms.MessageBox]::Show(
+                            "Error del sistema:`n`n$($response.mensaje)",
+                            "Error",
+                            "OK",
+                            "Error"
+                        )
+                        
+                        # Marcar para salir del bucle
+                        $debeTerminar = $true
+                    }
+                    
+                    default {
+                        Write-Log "❓ Estado desconocido: $($response.estado)" -Tipo Warning
                         Start-Sleep -Seconds 2
+                        $response = Request-EstadoViaWS -TimeoutSeconds 15
                     }
                 }
+                
+                # Procesar eventos de UI
+                [System.Windows.Forms.Application]::DoEvents()
+                
             } catch {
-                Write-Log "Error procesando estado: $_" -Tipo Error
+                Write-Log "❌ Error procesando estado: $_" -Tipo Error
+                Write-Log "Stack: $($_.ScriptStackTrace)" -Tipo Error
                 Start-Sleep -Seconds 2
+                
+                try {
+                    $response = Request-EstadoViaWS -TimeoutSeconds 15
+                } catch {
+                    Write-Log "❌ No se pudo recuperar: $_" -Tipo Error
+                    $debeTerminar = $true
+                }
             }
+            
             Start-Sleep -Milliseconds 200
         }
 
-        # Procesar estados finales
-        if ($response.estado -eq "Finalizado") { Invoke-EstadoFinalizado -Controles $controles -Response $response }
-        elseif ($response.estado -eq "Restringido") { Invoke-EstadoRestringido -Controles $controles -Response $response }
-        elseif ($response.estado -eq "Error") { Invoke-EstadoError -Controles $controles -Response $response }
-
-        # Limpieza final
+        # ============================================================
+        # LIMPIEZA
+        # ============================================================
+        Write-Log "🧹 Limpieza de recursos de sesión" -Tipo Info
+        
         try {
-            if ($queueMonitor) { $queueMonitor.Stop(); $queueMonitor.Dispose() }
-            if ($controles.WSTimer) { $controles.WSTimer.Stop(); $controles.WSTimer.Dispose() } 2>$null
-            if ($controles.Form) { $controles.Form.Close(); $controles.Form.Dispose() } 2>$null
+            if ($queueMonitor) {
+                $queueMonitor.Stop()
+                $queueMonitor.Dispose()
+                Write-Log "✅ Queue monitor detenido" -Tipo Success
+            }
+        } catch {
+            Write-Log "⚠️ Error deteniendo monitor: $_" -Tipo Warning
+        }
+        
+        try {
+            if ($controles.Form -and -not $controles.Form.IsDisposed) {
+                $controles.Form.Close()
+                $controles.Form.Dispose()
+                Write-Log "✅ Formulario cerrado" -Tipo Success
+            }
+        } catch {
+            Write-Log "⚠️ Error cerrando formulario: $_" -Tipo Warning
+        }
+
+        Write-Log "✅ Bucle de sesión finalizado correctamente" -Tipo Success
+        
+    } catch {
+        Write-Log "❌ Error crítico: $($_.Exception.Message)" -Tipo Error
+        Write-Log "Stack: $($_.ScriptStackTrace)" -Tipo Error
+        
+        try {
+            if ($controles -and $controles.Form -and -not $controles.Form.IsDisposed) {
+                $controles.Form.Close()
+            }
         } catch { }
-
-        Write-Log "Bucle de sesión finalizado" -Tipo Success
-    } catch { Write-Log "Error crítico en bucle de sesión: $_" -Tipo Error }
+    }
 }
-
 # ============================================================
 # 🧾 INICIALIZACIÓN Y LIMPIEZA (Initialize-System / Clear-Resources)
 # ============================================================

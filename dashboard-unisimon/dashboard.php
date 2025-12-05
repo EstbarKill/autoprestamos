@@ -143,8 +143,8 @@
                 <th>Inicio</th>
                 <th>Final Programado</th>
                 <th>Hora de Finalizacion</th>
-                <th>Estado</th>
                 <th>Bloqueado hasta</th>
+                <th>Estado</th>
                 <th>Acciones</th>
               </tr>
             </thead>

@@ -3,7 +3,7 @@ include '../config/db.php';
 header('Content-Type: application/json');
 
 // Obtener parámetro de filtro por punto de servicio
-$id_p_servicio = isset($_GET['id_p_servicio']) ? (int)$_GET['id_p_servicio'] : null;
+$id_p_servicio = isset($_GET['id_p_servicio_fk']) ? (int)$_GET['id_p_servicio_fk'] : null;
 
 $data = [
     "Abierto" => 0,

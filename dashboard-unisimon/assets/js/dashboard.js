@@ -51,7 +51,102 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 });
+// Función para agregar solicitud a la tabla
+function agregarSolicitud(nombreEquipo, sessionId, usuario) {
+    const tabla = document.querySelector("#tablaSolicitudes tbody");
+    
+    // Si está el mensaje de "sin solicitudes", eliminarlo
+    if (tabla.querySelector("td[colspan]")) {
+        tabla.innerHTML = "";
+    }
 
+    // Verificar si ya existe esta solicitud
+    const existente = Array.from(tabla.querySelectorAll("tr")).find(
+        row => row.dataset.sessionId === String(sessionId)
+    );
+    
+    if (existente) {
+        mostrarToast("⚠️ Esta solicitud ya está en la tabla", "warning");
+        return;
+    }
+
+    const row = document.createElement("tr");
+    row.dataset.sessionId = sessionId;
+    row.dataset.nombreEquipo = nombreEquipo;
+
+    const colPC = document.createElement("td");
+    colPC.textContent = nombreEquipo + (usuario ? ` (${usuario})` : "");
+
+    const colHora = document.createElement("td");
+    colHora.textContent = new Date().toLocaleTimeString();
+
+    const colAcciones = document.createElement("td");
+
+    // Botón aceptar
+    const btnAceptar = document.createElement("button");
+    btnAceptar.className = "btn-accion btn-aceptar";
+    btnAceptar.textContent = "✅ Aceptar";
+    btnAceptar.onclick = () => {
+        enviarRespuestaSolicitud(sessionId, true, nombreEquipo);
+        row.remove();
+        verificarTablaVacia();
+    };
+
+    // Botón rechazar
+    const btnRechazar = document.createElement("button");
+    btnRechazar.className = "btn-accion btn-rechazar";
+    btnRechazar.textContent = "❌ Rechazar";
+    btnRechazar.onclick = () => {
+        if (confirm(`¿Estás seguro de rechazar la solicitud de ${nombreEquipo}?`)) {
+            enviarRespuestaSolicitud(sessionId, false, nombreEquipo);
+            row.remove();
+            verificarTablaVacia();
+        }
+    };
+
+    colAcciones.appendChild(btnAceptar);
+    colAcciones.appendChild(btnRechazar);
+
+    row.appendChild(colPC);
+    row.appendChild(colHora);
+    row.appendChild(colAcciones);
+
+    tabla.appendChild(row);
+    
+    // Notificación visual
+    mostrarToast(`🔔 Nueva solicitud de ${nombreEquipo}`, "info");
+    agregarLog(`📨 Solicitud recibida de ${nombreEquipo}`, "info");
+}
+
+// Función para verificar si la tabla está vacía
+function verificarTablaVacia() {
+    const tabla = document.querySelector("#tablaSolicitudes tbody");
+    if (tabla.children.length === 0) {
+        tabla.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#777">Sin solicitudes pendientes</td></tr>`;
+    }
+}
+
+// Función para enviar respuesta a solicitud
+function enviarRespuestaSolicitud(sessionId, aceptar, nombreEquipo) {
+    const payload = {
+        tipo: "respuesta_solicitud",
+        action: aceptar ? "aceptar_renovacion" : "rechazar_renovacion",
+        session: sessionId,
+        origen: "dashboard",
+        timestamp: new Date().toISOString()
+    };
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+        
+        const accion = aceptar ? "aceptada" : "rechazada";
+        mostrarToast(`📤 Solicitud ${accion} para ${nombreEquipo}`, "success");
+        agregarLog(`✅ Solicitud ${accion}: ${nombreEquipo} (Sesión: ${sessionId})`, "success");
+    } else {
+        mostrarToast("⚠️ WebSocket no conectado", "warning");
+        console.error("WebSocket no conectado al enviar respuesta");
+    }
+}
 
 
 // 🟢 FUNCIÓN CORREGIDA - Conectar Dashboard
@@ -96,7 +191,6 @@ function desconectar() {
     return;
   }
 
-  if (confirm("⚠️ ¿Deseas desconectar del servidor WebSocket?")) {
     try {
       // Marcar como desconexión manual para evitar reintentos
       try { window.manualDisconnect = true; window.reconnecting = false; } catch(e){}
@@ -131,7 +225,6 @@ function desconectar() {
       console.error("Error al cerrar WebSocket:", err);
       mostrarToast("❌ Error al desconectar WebSocket");
     }
-  }
 }
 
 async function verificarServidor() {
@@ -194,6 +287,27 @@ function mostrarDesconectado() {
   fila.appendChild(celda);
   tbody.appendChild(fila);
 }
+function mostrarVacio() {
+  const tbody = document.querySelector("#tablaSesiones tbody");
+  if (!tbody) return;
+
+  // Limpia filas actuales
+  tbody.innerHTML = "";
+
+  // Inserta imagen centrada
+  const fila = document.createElement("tr");
+  const celda = document.createElement("td");
+  celda.colSpan = 8;
+  celda.style.textAlign = "center";
+  celda.style.padding = "10px";
+  celda.innerHTML = `
+    <td colspan="8" style="text-align:center; padding:10px;">
+    <img src="./assets/img/sesiones_vacias.jpg" alt="Servidor desconectado" style="width:1000px; opacity:0.1;">
+    </td>
+  `;
+  fila.appendChild(celda);
+  tbody.appendChild(fila);
+}
 
 // 🔄 FUNCIÓN CORREGIDA - Toggle Servidor
 function toggleServidor() {
@@ -207,20 +321,22 @@ function toggleServidor() {
 // 📊 FUNCIÓN CORREGIDA - Fetch Estado
 async function fetchEstado() {
   try { 
-    console.log("🌐 Solicitando estado via HTTP...");
-    // 1) pedir stats (aplicar filtro por sede sólo si estamos conectados por WS)
+    // Obtener sede desde localStorage o desde la variable global (restaurada en el DOMContentLoaded)
+    const sede = localStorage.getItem("sede_seleccionada") || sedeSeleccionada;
+    console.log("🌐 Solicitando estado via HTTP... Sede:", sede);
+    // 1) pedir stats (aplicar filtro por sede si hay una seleccionada)
     let statsUrl = "./dashboard_stats.php";
-    if (sedeSeleccionada && typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-      statsUrl += `?id_p_servicio=${sedeSeleccionada}`;
+    if (sede) {
+      statsUrl += `?id_p_servicio_fk=${encodeURIComponent(sede)}`;
     }
     const statsRes = await fetch(statsUrl);
     const stats = await statsRes.json();
     actualizarStats(stats);
     
-    // 2) pedir sesiones (aplicar filtro por sede sólo si estamos conectados por WS)
+    // 2) pedir sesiones (aplicar filtro por sede si hay una seleccionada)
     let sedesUrl = "./get_sesiones.php";
-    if (sedeSeleccionada && typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-      sedesUrl += `?id_p_servicio=${sedeSeleccionada}`;
+    if (sede) {
+      sedesUrl += `?id_p_servicio_fk=${encodeURIComponent(sede)}`;
     }
     const sesionesRes = await fetch(sedesUrl);
     const sesionesData = await sesionesRes.json();
@@ -420,13 +536,6 @@ function agregarSolicitud(pc, sessionId) {
     tabla.appendChild(row);
 }
 
-function verificarTablaVacia() {
-    const tabla = document.querySelector("#tablaSolicitudes tbody");
-    if (tabla.children.length === 0) {
-        tabla.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#777">Sin solicitudes</td></tr>`;
-    }
-}
-
 function enviarRespuestaSolicitud(sessionId, aceptar) {
     const payload = {
         tipo: "respuesta_solicitud",
@@ -455,6 +564,9 @@ async function actualizarTabla(sesiones) {
     if (typeof ws !== "undefined" && ws && ws.readyState === WebSocket.OPEN) {
       // El heartbeat cada 8s se encargará de actualizar
       console.log("ℹ️ Datos de sesiones obtenidos");
+      if (sesiones && sesiones.length === 0) {
+        mostrarVacio();
+      }
       HEARTBEAT_INTERVAL
       return;
     } else {
@@ -472,13 +584,7 @@ async function actualizarTabla(sesiones) {
     } else {
       // Si los objetos no traen id de servicio (por ejemplo mensajes WS antiguos), pedir via HTTP filtrado
       try {
-        const res = await fetch(`./get_sesiones.php?id_p_servicio=${sedeSeleccionada}`);
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          sesiones = data;
-          // Actualizar caché global
-          window.sesiones = data;
-        }
+      aplicarFiltroSede();
       } catch (err) {
         console.warn('❌ Error obteniendo sesiones filtradas por sede via HTTP:', err);
       }
@@ -522,7 +628,7 @@ async function actualizarTabla(sesiones) {
       s.fecha_final_real || "-"
     }</td>
             <td class="text-${estadoColor(s.nombre_estado)}">${
-      s.bloqueado_hasta || "N/A "
+      s.bloqueado_hasta || "N/A"
     }</td>
             <td><span class="badge bg-${estadoColor(s.nombre_estado)}">${
       s.nombre_estado || "-"
@@ -644,8 +750,7 @@ function filtrarTabla() {
 
 // 🏢 CAMBIAR SEDE Y FILTRAR SESIONES
 function cambiarSede() {
-  // Al cambiar la sede desde el selector, únicamente guardamos la selección
-  // No se realiza filtrado ni fetch hasta que haya una conexión activa
+  // Al cambiar la sede desde el selector, solo actuar si WebSocket está conectado
   const sedeSelect = document.getElementById("selectSede");
   if (!sedeSelect) return;
 
@@ -659,19 +764,54 @@ function cambiarSede() {
     return;
   }
 
-  // Guardamos la selección localmente y mostramos un aviso. El filtrado
-  // real se aplicará solo cuando se establezca la conexión (botón "Conectar").
-  sedeSeleccionada = sedeId;
-  localStorage.setItem("sede_seleccionada", sedeId);
-  // Si ya estamos conectados via WebSocket, aplicar el filtro al instante
-  try {
-    if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-      console.log('WebSocket abierto: aplicando filtro de sede inmediatamente');
-      // Llamada asíncrona; no bloqueamos el hilo UI
-      aplicarFiltroSede().catch(err => console.error('Error aplicando filtro al cambiar sede:', err));
+  // Verificar si WebSocket está conectado
+  const wsConectado = typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN;
+
+  // Si WebSocket está conectado, pedir confirmación y reconectar
+  if (wsConectado) {
+    if (!confirm(`¿Deseas cambiar a la sede ${sedeId}? Se desconectará y reconectará el WebSocket.`)) {
+      // Si cancela, restaurar la sede anterior en el selector
+      const sedeAnterior = localStorage.getItem("sede_seleccionada");
+      if (sedeAnterior) {
+        sedeSelect.value = sedeAnterior;
+      } else {
+        sedeSelect.value = "";
+      }
+      mostrarToast("Cambio de sede cancelado");
+      return;
     }
-  } catch (err) {
-    console.warn('⚠️ Error comprobando estado de WebSocket al cambiar sede:', err);
+
+    // Guardamos la selección localmente
+    sedeSeleccionada = sedeId;
+    localStorage.setItem("sede_seleccionada", sedeId);
+    console.log(`🏢 Cambiando a sede: ${sedeId}`);
+
+    try {
+      console.log('🔌 WebSocket abierto: desconectando para cambiar de sede...');
+      
+      // Marcar como cambio manual de sede para evitar reintentos automáticos
+      window.manualDisconnect = true;
+      
+      // Cerrar conexión actual
+      ws.close();
+      
+      // Esperar a que se cierre y reconectar con la nueva sede
+      setTimeout(() => {
+        console.log('🔌 Reconectando con nueva sede...');
+        conectarD();
+      }, 1000);
+      
+      mostrarToast(`🔄 Desconectando y reconectando con la sede ${sedeId}...`);
+    } catch (err) {
+      console.error('⚠️ Error al cambiar de sede:', err);
+      mostrarToast('❌ Error al cambiar de sede', 'danger');
+    }
+  } else {
+    // Si no está conectado, solo guardar la sede sin hacer nada más
+    sedeSeleccionada = sedeId;
+    localStorage.setItem("sede_seleccionada", sedeId);
+    console.log(`🏢 Sede guardada localmente: ${sedeId} (WebSocket no conectado)`);
+    mostrarToast(`✅ Sede guardada. Conecta el WebSocket para aplicar cambios.`);
   }
 }
 
@@ -688,7 +828,7 @@ async function aplicarFiltroSede() {
 
   const sedeId = sedeSeleccionada;
   try {
-    const res = await fetch(`./get_sesiones.php?id_p_servicio=${sedeId}`);
+    const res = await fetch(`./get_sesiones.php?id_p_servicio_fk=${sedeId}`);
     const data = await res.json();
     if (Array.isArray(data)) {
       console.log(`📥 Sesiones cargadas para sede ${sedeId}:`, data.length);
@@ -698,6 +838,22 @@ async function aplicarFiltroSede() {
     } else {
       console.warn('Respuesta no es array:', data);
       mostrarToast('Error al cargar sesiones');
+    }
+    const rest = await fetch(`./dashboard_stats.php?id_p_servicio_fk=${encodeURIComponent(sedeId)}`);
+    const datat = await rest.json();
+    // `dashboard_stats.php` normalmente devuelve un objeto con conteos (Abierto,Suspendido,...)
+    // Manejar respuesta como objeto de stats o, en fallback raro, como un array de sesiones.
+    if (datat && typeof datat === 'object' && !Array.isArray(datat)) {
+      console.log(`📊 Stats recibidos para sede ${sedeId}:`, datat);
+      actualizarStats(datat);
+    } else if (Array.isArray(datat)) {
+      // Fallback: si el endpoint devolviera un array, lo tratamos como sesiones
+      console.log(`📥 Datos de sesiones (array) recibidos para sede ${sedeId}:`, datat.length);
+      sesiones = datat; // Actualizar caché global
+      actualizarTabla(sesiones);
+      mostrarToast(`Sesiones filtradas por sede: ${sedeId}`);
+    } else {
+      console.warn('Respuesta inesperada de dashboard_stats.php:', datat);
     }
   } catch (err) {
     console.error('❌ Error cargando sesiones por sede:', err);
@@ -752,47 +908,6 @@ function accionSesion(id, accion) {
     console.error("❌ WebSocket no disponible para enviar comando");
     mostrarToast("⚠️ WebSocket desconectado - Comando no enviado", "warning");
   }
-  /** 
-    // 🟢 2️⃣ Luego actualizar base de datos (para persistencia)
-    console.log(`💾 Registrando acción en BD: ${accion} para sesión ${id}`);
-    fetch("./dashboard_action.php", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accion, id })
-    })
-    .then(res => {
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-        return res.json();
-    })
-    .then(data => {
-        console.log("✅ Respuesta BD:", data);
-        if (data.status === "ok") {
-            mostrarToast(`✅ ${data.mensaje}`, "success");
-            
-            // 🟢 3️⃣ Actualizar interfaz después de 1 segundo
-            setTimeout(() => {
-                console.log("🔄 Actualizando interfaz...");
-                if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({
-                      tipo: "actualizar",
-                      origen: "dashboard"
-                    }));
-                    console.log("📡 Solicitando actualización via WS");
-                } else {
-                    fetchEstado();
-                }
-            }, 1000);
-        } else {
-            console.error("❌ Error en BD:", data.mensaje);
-            mostrarToast(`❌ Error: ${data.mensaje}`, "danger");
-        }
-    })
-    .catch(err => {
-        console.error("❌ Error al registrar acción:", err);
-        mostrarToast("❌ Error al registrar acción en BD", "danger");
-    });*/
 }
 
 function guardarConfig() {
